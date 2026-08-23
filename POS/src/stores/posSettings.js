@@ -68,6 +68,14 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Security
 		enable_session_lock: 0,
 		session_lock_timeout: 5,
+		// Barcode
+		enable_scale_barcode: 1,
+		scale_barcode_start_with: "221",
+		scale_barcode_total_length: 13,
+		scale_item_barcode_length: 7,
+		scale_weight_length: 5,
+		scale_weight_divisor: 1000,
+		scale_check_digit_length: 1,
 	});
 
 	const isLoading = ref(false);
@@ -283,6 +291,14 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			// Security
 			enable_session_lock: 0,
 			session_lock_timeout: 5,
+			// Barcode
+			enable_scale_barcode: 1,
+			scale_barcode_start_with: "221",
+			scale_barcode_total_length: 13,
+			scale_item_barcode_length: 7,
+			scale_weight_length: 5,
+			scale_weight_divisor: 1000,
+			scale_check_digit_length: 1,
 		};
 		isLoaded.value = false;
 	}

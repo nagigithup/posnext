@@ -26,7 +26,8 @@ from functools import lru_cache
 from typing import TypedDict
 
 import frappe
-from erpnext.stock.get_item_details import get_conversion_factor
+from frappe import _
+from frappe.utils import cint, flt
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class BarcodeResult(TypedDict, total=False):
 	barcode_type: str  # "Weighted" or "Priced"
 	uom: str | None  # UOM from Item Barcodes table
 	qty: float | None  # Quantity (only for weighted barcodes)
+	check_digit: str | None
 
 
 class ResolvedItemData(TypedDict, total=False):
@@ -127,6 +129,75 @@ def resolve_barcode(barcode: str, pos_profile: str) -> BarcodeResult | None:
 			result.get("barcode_type"),
 		)
 	return result
+
+
+def resolve_scale_barcode(barcode: str, pos_profile: str) -> BarcodeResult | None:
+	"""Resolve POSNext's built-in weighted scale barcode format."""
+	settings = _get_scale_barcode_settings(pos_profile)
+	if not settings or not cint(settings.get("enable_scale_barcode")):
+		return None
+
+	barcode = str(barcode or "").strip()
+	total_length = cint(settings.get("scale_barcode_total_length"))
+	item_length = cint(settings.get("scale_item_barcode_length"))
+	weight_length = cint(settings.get("scale_weight_length"))
+	check_digit_length = cint(settings.get("scale_check_digit_length"))
+	weight_divisor = flt(settings.get("scale_weight_divisor"))
+	prefix = str(settings.get("scale_barcode_start_with") or "").strip()
+
+	if not barcode.isdigit() or len(barcode) != total_length or not prefix or not barcode.startswith(prefix):
+		return None
+
+	if item_length <= 0 or weight_length <= 0 or check_digit_length < 0 or weight_divisor <= 0:
+		frappe.throw(_("Scale barcode settings are invalid"))
+
+	if item_length + weight_length + check_digit_length != total_length:
+		frappe.throw(_("Scale barcode length settings do not match the total length"))
+
+	item_barcode = barcode[:item_length]
+	weight_start = item_length
+	weight_end = weight_start + weight_length
+	weight_raw = barcode[weight_start:weight_end]
+	check_digit = barcode[weight_end:] if check_digit_length else None
+
+	if not weight_raw.isdigit():
+		frappe.throw(_("Scale barcode {0} has an invalid weight section").format(barcode))
+
+	qty = cint(weight_raw) / weight_divisor
+	if qty <= 0:
+		frappe.throw(_("Scale barcode {0} has invalid zero weight").format(barcode))
+
+	return {
+		"item_barcode": item_barcode,
+		"integer_value": str(cint(weight_raw) // cint(weight_divisor)) if cint(weight_divisor) else None,
+		"decimal_value": weight_raw,
+		"barcode_type": "Weighted",
+		"qty": qty,
+		"check_digit": check_digit,
+	}
+
+
+def _get_scale_barcode_settings(pos_profile: str) -> dict | None:
+	settings_name = frappe.db.get_value("POS Settings", {"pos_profile": pos_profile}, "name")
+	if not settings_name:
+		return None
+
+	settings = frappe.db.get_value(
+		"POS Settings",
+		settings_name,
+		[
+			"enable_scale_barcode",
+			"scale_barcode_start_with",
+			"scale_barcode_total_length",
+			"scale_item_barcode_length",
+			"scale_weight_length",
+			"scale_weight_divisor",
+			"scale_check_digit_length",
+		],
+		as_dict=True,
+	)
+
+	return settings or None
 
 
 def _get_barcode_rules_for_profile(pos_profile: str) -> list[str] | None:
@@ -220,10 +291,17 @@ def compute_resolved_item_data(
 	    ...     item_data = compute_resolved_item_data(resolved, item_rate=10.0)
 	    ...     print(f"Qty: {item_data['resolved_qty']}, UOM: {item_data['resolved_uom']}")
 	"""
-	if not resolved_barcode or not is_barcode_resolver_available():
+	if not resolved_barcode:
 		return None
 
-	from barcode_resolver.barcode_resolver.doctype.barcode_rule.utils import BarcodeTypes
+	try:
+		from barcode_resolver.barcode_resolver.doctype.barcode_rule.utils import BarcodeTypes
+
+		weighted_type = BarcodeTypes.WEIGHTED.value
+		priced_type = BarcodeTypes.PRICED.value
+	except ImportError:
+		weighted_type = "Weighted"
+		priced_type = "Priced"
 
 	barcode_type = resolved_barcode.get("barcode_type")
 	barcode_uom = resolved_barcode.get("uom")
@@ -247,7 +325,7 @@ def compute_resolved_item_data(
 	# the parsed value and falling back to reconstructing from segments.
 	encoded_qty = _coerce_value(resolved_barcode, "qty")
 	encoded_price = _coerce_value(resolved_barcode, "price")
-	if barcode_type == BarcodeTypes.WEIGHTED.value:
+	if barcode_type == weighted_type:
 		if encoded_qty is None:
 			logger.warning(
 				"compute_resolved_item_data: weighted barcode missing qty and segments: %s",
@@ -258,6 +336,8 @@ def compute_resolved_item_data(
 		uom = barcode_uom
 		price = barcode_uom_price
 		if barcode_uom not in uom_prices:
+			from erpnext.stock.get_item_details import get_conversion_factor
+
 			conversion_factor = get_conversion_factor(item_name, barcode_uom).get("conversion_factor", 1)
 			qty *= conversion_factor
 			uom = item_uom
@@ -269,7 +349,7 @@ def compute_resolved_item_data(
 			"resolved_price": price,
 			"resolved_barcode_type": barcode_type,
 		}
-	elif barcode_type == BarcodeTypes.PRICED.value:
+	elif barcode_type == priced_type:
 		if encoded_price is None:
 			logger.warning(
 				"compute_resolved_item_data: priced barcode missing price and segments: %s",
@@ -283,6 +363,8 @@ def compute_resolved_item_data(
 			uom = barcode_uom
 			qty = encoded_price / price if price and price > 0 else None
 		else:
+			from erpnext.stock.get_item_details import get_conversion_factor
+
 			conversion_factor = get_conversion_factor(item_name, barcode_uom).get("conversion_factor", 1)
 			uom = barcode_uom
 			price = conversion_factor * item_price

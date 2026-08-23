@@ -20,6 +20,30 @@ class POSSettings(Document):
 			if search_limit <= 0:
 				frappe.throw("Search Limit must be greater than 0")
 
+		if cint(self.enable_scale_barcode):
+			total_length = cint(self.scale_barcode_total_length)
+			item_length = cint(self.scale_item_barcode_length)
+			weight_length = cint(self.scale_weight_length)
+			check_digit_length = cint(self.scale_check_digit_length)
+			weight_divisor = flt(self.scale_weight_divisor)
+			prefix = (self.scale_barcode_start_with or "").strip()
+
+			if not prefix or not prefix.isdigit():
+				frappe.throw("Scale Barcode Start With must be numeric")
+			if total_length <= 0 or item_length <= 0 or weight_length <= 0:
+				frappe.throw("Scale barcode lengths must be greater than 0")
+			if check_digit_length < 0:
+				frappe.throw("Scale Check Digit Length cannot be negative")
+			if weight_divisor <= 0:
+				frappe.throw("Scale Weight Divisor must be greater than 0")
+			if len(prefix) > item_length:
+				frappe.throw("Scale Barcode Start With cannot be longer than Scale Item Barcode Length")
+			if item_length + weight_length + check_digit_length != total_length:
+				frappe.throw(
+					"Scale Item Barcode Length + Scale Weight Length + Scale Check Digit Length "
+					"must equal Scale Barcode Total Length"
+				)
+
 		# Validate use_exact_amount cannot be enabled with credit sale or partial payment
 		if cint(self.use_exact_amount):
 			if cint(self.allow_credit_sale):
