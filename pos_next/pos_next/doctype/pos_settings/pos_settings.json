@@ -6,6 +6,13 @@
  "field_order": [
   "pos_profile",
   "enabled",
+  "section_break_erpnext_compatibility",
+  "invoice_type",
+  "column_break_erpnext_compatibility",
+  "post_change_gl_entries",
+  "section_break_pos_fields",
+  "invoice_fields",
+  "pos_search_fields",
   "section_break_localization",
   "allowed_locales",
   "section_break_wallet",
@@ -98,6 +105,47 @@
    "fieldname": "enabled",
    "fieldtype": "Check",
    "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_erpnext_compatibility",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Compatibility"
+  },
+  {
+   "default": "Sales Invoice",
+   "description": "The system will create a Sales Invoice or a POS Invoice from the POS interface based on this setting. For high-volume transactions, it is recommended to use POS Invoice.",
+   "fieldname": "invoice_type",
+   "fieldtype": "Select",
+   "label": "Invoice Type Created via POS Screen",
+   "options": "Sales Invoice\nPOS Invoice"
+  },
+  {
+   "fieldname": "column_break_erpnext_compatibility",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "If enabled, ledger entries will be posted for change amount in POS transactions",
+   "fieldname": "post_change_gl_entries",
+   "fieldtype": "Check",
+   "label": "Create Ledger Entries for Change Amount",
+   "options": "1"
+  },
+  {
+   "fieldname": "section_break_pos_fields",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "invoice_fields",
+   "fieldtype": "Table",
+   "label": "POS Additional Fields",
+   "options": "POS Field"
+  },
+  {
+   "fieldname": "pos_search_fields",
+   "fieldtype": "Table",
+   "label": "POS Search Fields",
+   "options": "POS Search Fields"
   },
   {
    "fieldname": "section_break_localization",
