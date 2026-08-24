@@ -13,6 +13,39 @@ from frappe.model.document import Document
 from frappe.utils import flt
 
 
+SHIFT_MANAGER_ROLES = {"System Manager", "Sales Manager", "Nexus POS Manager"}
+
+
+def validate_opening_shift_access(pos_opening_shift, require_open=True):
+	if not pos_opening_shift:
+		frappe.throw(_("POS Opening Shift is required."))
+
+	opening_shift = frappe.db.get_value(
+		"POS Opening Shift",
+		pos_opening_shift,
+		["name", "user", "status", "docstatus"],
+		as_dict=True,
+	)
+
+	if not opening_shift:
+		frappe.throw(_("POS Opening Shift {0} was not found.").format(pos_opening_shift))
+
+	if opening_shift.docstatus != 1 or (require_open and opening_shift.status != "Open"):
+		frappe.throw(
+			_("Selected POS Opening Shift should be open."),
+			title=_("Invalid Opening Entry"),
+		)
+
+	user_roles = set(frappe.get_roles(frappe.session.user))
+	if opening_shift.user != frappe.session.user and not user_roles.intersection(SHIFT_MANAGER_ROLES):
+		frappe.throw(
+			_("You are not allowed to close this POS Opening Shift."),
+			frappe.PermissionError,
+		)
+
+	return opening_shift
+
+
 def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
 	"""Return the value for a field in company currency."""
 
@@ -73,21 +106,25 @@ class POSClosingShift(Document):
 			d.difference = +flt(d.closing_amount, precision) - flt(d.expected_amount, precision)
 
 	def on_submit(self):
+		validate_opening_shift_access(self.pos_opening_shift)
 		opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
+		opening_entry.flags.ignore_permissions = True
 		opening_entry.pos_closing_shift = self.name
 		opening_entry.set_status()
 		self.delete_draft_invoices()
-		opening_entry.save()
+		opening_entry.save(ignore_permissions=True)
 		# link invoices with this closing shift so ERPNext can block edits
 		self._set_closing_entry_invoices()
 
 	def on_cancel(self):
 		if frappe.db.exists("POS Opening Shift", self.pos_opening_shift):
+			validate_opening_shift_access(self.pos_opening_shift, require_open=False)
 			opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
+			opening_entry.flags.ignore_permissions = True
 			if opening_entry.pos_closing_shift == self.name:
 				opening_entry.pos_closing_shift = ""
 				opening_entry.set_status()
-				opening_entry.save()
+				opening_entry.save(ignore_permissions=True)
 		# remove links from invoices so they can be cancelled
 		self._clear_closing_entry_invoices()
 
@@ -631,6 +668,7 @@ def make_closing_shift_from_opening(opening_shift):
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
 	closing_shift = json.loads(closing_shift)
+	validate_opening_shift_access(closing_shift.get("pos_opening_shift"))
 	closing_shift_doc = frappe.get_doc(closing_shift)
 	closing_shift_doc.flags.ignore_permissions = True
 	closing_shift_doc.save()
