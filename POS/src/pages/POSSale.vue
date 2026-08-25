@@ -190,7 +190,7 @@
 				</template>
 				<template #additional-actions>
 					<button
-						v-if="canAccessShiftActions"
+						v-if="canCloseShift"
 						@click="handleCloseShift()"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-orange-50 flex items-center gap-3 transition-colors"
 					>
@@ -521,9 +521,17 @@
 
 			<!-- Shift Closing Dialog -->
 			<ShiftClosingDialog
+				v-if="canSubmitOfficialClosing"
 				v-model="uiStore.showCloseShiftDialog"
 				:opening-shift="shiftStore.currentShift?.name"
 				@shift-closed="handleShiftClosed"
+			/>
+
+			<CashierPreliminaryClosingDialog
+				v-if="canSubmitPreliminaryClosing"
+				v-model="uiStore.showPreliminaryClosingDialog"
+				:opening-shift="shiftStore.currentShift?.name"
+				@submitted="preliminarySubmitted = true"
 			/>
 
 			<!-- Draft Invoices Dialog -->
@@ -998,6 +1006,7 @@ let _posInitPromise = null;
 
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
+import CashierPreliminaryClosingDialog from "@/components/CashierPreliminaryClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
@@ -1116,6 +1125,7 @@ const pendingPaymentAfterCustomer = ref(false);
 const logoutAfterClose = ref(false);
 const editCustomer = ref(null); // Customer being edited (null for create mode)
 const showClearCacheDialog = ref(false);
+const preliminarySubmitted = ref(false);
 const clearCacheOverlayRef = ref(null);
 
 // Debounce timer for offer reapplication
@@ -1217,6 +1227,29 @@ const profileWarehouses = computed(() => {
 });
 
 const canAccessShiftActions = computed(() => shiftStore.hasOpenShift);
+
+const canSubmitOfficialClosing = computed(() =>
+	Boolean(bootstrapStore.data?.can_submit_official_closing)
+);
+const canSubmitPreliminaryClosing = computed(() =>
+	Boolean(bootstrapStore.data?.can_submit_preliminary_closing)
+);
+const hasPreliminaryClosing = computed(
+	() => preliminarySubmitted.value || Boolean(bootstrapStore.data?.has_preliminary_closing)
+);
+const canCloseShift = computed(
+	() =>
+		shiftStore.hasOpenShift &&
+		((canSubmitOfficialClosing.value && !bootstrapStore.data?.has_official_closing_draft) ||
+			(canSubmitPreliminaryClosing.value && !hasPreliminaryClosing.value))
+);
+
+watch(
+	() => shiftStore.currentShift?.name,
+	(newShift, oldShift) => {
+		if (newShift !== oldShift) preliminarySubmitted.value = false;
+	}
+);
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
 const canSwitchToDesk = computed(() => Boolean(bootstrapStore.data?.can_switch_to_desk));
@@ -2359,11 +2392,15 @@ async function handleOptionSelected(option) {
 }
 
 function handleCloseShift() {
-	if (!canAccessShiftActions.value) {
+	if (!canCloseShift.value) {
 		return;
 	}
 
-	uiStore.showCloseShiftDialog = true;
+	if (canSubmitOfficialClosing.value) {
+		uiStore.showCloseShiftDialog = true;
+	} else {
+		uiStore.showPreliminaryClosingDialog = true;
+	}
 }
 
 function openDraftDialog() {

@@ -65,6 +65,15 @@ def get_initial_data():
 		"locale": _get_user_language(),
 		"precision": _get_precision_settings(),
 		"can_switch_to_desk": "Nexus POS Manager" in frappe.get_roles(),
+		"can_submit_official_closing": bool(
+			set(frappe.get_roles())
+			& {"Accounts User", "Accounts Manager", "System Manager", "Sales Manager", "Nexus POS Manager"}
+		),
+		"can_submit_preliminary_closing": bool(
+			set(frappe.get_roles()) & {"Cashier", "POSNext Cashier"}
+		),
+		"has_preliminary_closing": False,
+		"has_official_closing_draft": False,
 		"shift": None,
 		"pos_profile": None,
 		"pos_settings": None,
@@ -85,6 +94,18 @@ def get_initial_data():
 		"period_start_date": str(shift["period_start_date"]),
 		"status": shift["status"],
 	}
+	result["has_preliminary_closing"] = bool(
+		frappe.db.exists(
+			"Cashier Preliminary Closing",
+			{"pos_opening_shift": shift["name"], "docstatus": ["<", 2]},
+		)
+	)
+	result["has_official_closing_draft"] = bool(
+		frappe.db.exists(
+			"POS Closing Shift",
+			{"pos_opening_shift": shift["name"], "docstatus": 0},
+		)
+	)
 
 	result["pos_profile"] = {
 		"name": pos_profile.name,

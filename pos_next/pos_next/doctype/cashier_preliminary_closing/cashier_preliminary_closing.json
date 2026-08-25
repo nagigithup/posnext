@@ -1,0 +1,188 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-08-24 20:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "shift_information_section",
+  "company",
+  "pos_profile",
+  "column_break_shift",
+  "pos_opening_shift",
+  "cashier",
+  "opening_datetime",
+  "closing_datetime",
+  "pos_closing_shift",
+  "declaration_section",
+  "cash_amount",
+  "network_amount",
+  "payments"
+ ],
+ "fields": [
+  {
+   "default": "CPC-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Naming Series",
+   "options": "CPC-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "shift_information_section",
+   "fieldtype": "Section Break",
+   "label": "Shift Information"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "pos_profile",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "POS Profile",
+   "options": "POS Profile",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_shift",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pos_opening_shift",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "POS Opening Shift",
+   "options": "POS Opening Shift",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "__user",
+   "fieldname": "cashier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Cashier",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "opening_datetime",
+   "fieldtype": "Datetime",
+   "label": "Opening Datetime",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "closing_datetime",
+   "fieldtype": "Datetime",
+   "label": "Closing Datetime",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "pos_closing_shift",
+   "fieldtype": "Link",
+   "label": "POS Closing Shift",
+   "no_copy": 1,
+   "options": "POS Closing Shift",
+   "read_only": 1
+  },
+  {
+   "fieldname": "declaration_section",
+   "fieldtype": "Section Break",
+   "label": "Cashier Declaration"
+  },
+  {
+   "fieldname": "cash_amount",
+   "fieldtype": "Currency",
+   "label": "رصيد الخزينة",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "network_amount",
+   "fieldtype": "Currency",
+   "label": "رصيد مبيعات الشبكة",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "payments",
+   "fieldtype": "Table",
+   "hidden": 1,
+   "label": "Declared Payments",
+   "options": "Cashier Closing Payment",
+   "read_only": 1
+  }
+ ],
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-08-24 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "POS Next",
+ "name": "Cashier Preliminary Closing",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "if_owner": 1,
+   "read": 1,
+   "role": "Cashier",
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "if_owner": 1,
+   "read": 1,
+   "role": "POSNext Cashier",
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Nexus POS Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "pos_opening_shift",
+ "track_changes": 1
+}

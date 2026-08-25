@@ -148,9 +148,13 @@ def create_opening_shift(pos_profile, company, balance_details):
 @frappe.whitelist()
 def get_closing_shift_data(opening_shift):
 	"""Get data for closing shift"""
-	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import make_closing_shift_from_opening
+	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import (
+		make_closing_shift_from_opening,
+		validate_official_closing_access,
+	)
 
 	try:
+		validate_official_closing_access()
 		# Get the opening shift document
 		opening_shift_doc = frappe.get_doc("POS Opening Shift", opening_shift)
 
@@ -173,9 +177,11 @@ def submit_closing_shift(closing_shift):
 	"""Submit closing shift"""
 	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import (
 		submit_closing_shift as submit_shift,
+		validate_official_closing_access,
 	)
 
 	try:
+		validate_official_closing_access()
 		# closing_shift is already a JSON string from frontend
 		# If it's a dict, convert to JSON string
 		if isinstance(closing_shift, dict):

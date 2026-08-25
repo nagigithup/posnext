@@ -51,6 +51,10 @@ def remove_custom_fields():
 		custom_fields = [
 			"Sales Invoice-posa_pos_opening_shift",
 			"Sales Invoice-posa_is_printed",
+			"POS Profile-posa_network_mode_of_payment",
+			"POS Closing Shift-custom_preliminary_closing",
+			"POS Invoice-posa_pos_opening_shift",
+			"POS Invoice-posa_is_printed",
 		]
 
 		removed_count = 0

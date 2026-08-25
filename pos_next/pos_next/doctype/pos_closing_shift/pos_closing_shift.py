@@ -13,7 +13,23 @@ from frappe.model.document import Document
 from frappe.utils import flt
 
 
-SHIFT_MANAGER_ROLES = {"System Manager", "Sales Manager", "Nexus POS Manager"}
+SHIFT_MANAGER_ROLES = {
+	"Accounts User",
+	"Accounts Manager",
+	"System Manager",
+	"Sales Manager",
+	"Nexus POS Manager",
+}
+
+
+def validate_official_closing_access():
+	if getattr(frappe.flags, "cashier_preliminary_closing_builder", False):
+		return
+	if not set(frappe.get_roles()).intersection(SHIFT_MANAGER_ROLES):
+		frappe.throw(
+			_("You are not allowed to access official POS closing reconciliation."),
+			frappe.PermissionError,
+		)
 
 
 def validate_opening_shift_access(pos_opening_shift, require_open=True):
@@ -106,6 +122,26 @@ class POSClosingShift(Document):
 			d.difference = +flt(d.closing_amount, precision) - flt(d.expected_amount, precision)
 
 	def on_submit(self):
+		validate_official_closing_access()
+		frappe.db.sql(
+			"SELECT name FROM `tabPOS Opening Shift` WHERE name = %s FOR UPDATE",
+			self.pos_opening_shift,
+		)
+		existing_submitted = frappe.db.get_value(
+			"POS Closing Shift",
+			{
+				"pos_opening_shift": self.pos_opening_shift,
+				"docstatus": 1,
+				"name": ["!=", self.name],
+			},
+			"name",
+		)
+		if existing_submitted:
+			frappe.throw(
+				_("POS Closing Shift {0} is already submitted for this opening shift.").format(
+					existing_submitted
+				)
+			)
 		validate_opening_shift_access(self.pos_opening_shift)
 		opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
 		opening_entry.flags.ignore_permissions = True
@@ -117,6 +153,7 @@ class POSClosingShift(Document):
 		self._set_closing_entry_invoices()
 
 	def on_cancel(self):
+		validate_official_closing_access()
 		if frappe.db.exists("POS Opening Shift", self.pos_opening_shift):
 			validate_opening_shift_access(self.pos_opening_shift, require_open=False)
 			opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
@@ -386,12 +423,19 @@ def get_cashiers(doctype, txt, searchfield, start, page_len, filters):
 
 @frappe.whitelist()
 def get_pos_invoices(pos_opening_shift, doctype=None):
+	validate_official_closing_access()
 	if not doctype:
-		pos_profile = frappe.db.get_value("POS Opening Shift", pos_opening_shift, "pos_profile")
-		use_pos_invoice = False
-		doctype = "POS Invoice" if use_pos_invoice else "Sales Invoice"
+		doctype = "Sales Invoice"
+	if doctype not in {"Sales Invoice", "POS Invoice"}:
+		frappe.throw(_("Unsupported invoice type."))
+	if not frappe.db.has_column(doctype, "posa_pos_opening_shift"):
+		return []
 	submit_printed_invoices(pos_opening_shift, doctype)
-	cond = " and ifnull(consolidated_invoice,'') = ''" if doctype == "POS Invoice" else ""
+	cond = (
+		" and ifnull(consolidated_invoice,'') = ''"
+		if doctype == "POS Invoice" and frappe.db.has_column(doctype, "consolidated_invoice")
+		else ""
+	)
 	data = frappe.db.sql(
 		f"""
 	select
@@ -412,6 +456,7 @@ def get_pos_invoices(pos_opening_shift, doctype=None):
 
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
+	validate_official_closing_access()
 	return frappe.get_all(
 		"Payment Entry",
 		filters={
@@ -557,13 +602,17 @@ def _process_invoice(invoice, invoice_field, company_currency, cash_mode, paymen
 	return transaction
 
 
+def get_supported_invoice_sources():
+	sources = [("Sales Invoice", "sales_invoice")]
+	if frappe.db.exists("DocType", "POS Invoice"):
+		sources.append(("POS Invoice", "pos_invoice"))
+	return sources
+
+
 @frappe.whitelist()
 def make_closing_shift_from_opening(opening_shift):
+	validate_official_closing_access()
 	opening_shift = json.loads(opening_shift)
-	doctype = "Sales Invoice"
-	invoice_field = "sales_invoice"
-
-	submit_printed_invoices(opening_shift.get("name"), doctype)
 
 	# Initialize closing shift document
 	closing_shift = frappe.new_doc("POS Closing Shift")
@@ -610,11 +659,20 @@ def make_closing_shift_from_opening(opening_shift):
 			)
 		)
 
-	# Process invoices
-	invoices = get_pos_invoices(opening_shift.get("name"), doctype)
-	for invoice in invoices:
-		txn = _process_invoice(invoice, invoice_field, company_currency, cash_mode, payments, taxes, summary)
-		pos_transactions.append(txn)
+	# Process both supported invoice paths. Consolidated POS Invoices are
+	# excluded by get_pos_invoices so the same sale is never counted twice.
+	for doctype, invoice_field in get_supported_invoice_sources():
+		for invoice in get_pos_invoices(opening_shift.get("name"), doctype):
+			txn = _process_invoice(
+				invoice,
+				invoice_field,
+				company_currency,
+				cash_mode,
+				payments,
+				taxes,
+				summary,
+			)
+			pos_transactions.append(txn)
 
 	# Process payment entries
 	pos_payments_table = []
@@ -667,6 +725,7 @@ def make_closing_shift_from_opening(opening_shift):
 
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
+	validate_official_closing_access()
 	closing_shift = json.loads(closing_shift)
 	validate_opening_shift_access(closing_shift.get("pos_opening_shift"))
 	closing_shift_doc = frappe.get_doc(closing_shift)
@@ -677,6 +736,10 @@ def submit_closing_shift(closing_shift):
 
 
 def submit_printed_invoices(pos_opening_shift, doctype):
+	if not frappe.db.has_column(doctype, "posa_pos_opening_shift"):
+		return
+	if not frappe.db.has_column(doctype, "posa_is_printed"):
+		return
 	invoices_list = frappe.get_all(
 		doctype,
 		filters={
