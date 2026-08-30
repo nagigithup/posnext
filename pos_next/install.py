@@ -136,6 +136,28 @@ def setup_cashier_preliminary_closing():
 					"unique": 1,
 				},
 			],
+			"POS Opening Shift": [
+				{
+					"fieldname": "custom_preliminary_closed",
+					"label": "Preliminary Closed",
+					"fieldtype": "Check",
+					"insert_after": "pos_closing_shift",
+					"default": "0",
+					"allow_on_submit": 1,
+					"read_only": 1,
+					"no_copy": 1,
+				},
+				{
+					"fieldname": "custom_preliminary_closing",
+					"label": "Cashier Preliminary Closing",
+					"fieldtype": "Link",
+					"options": "Cashier Preliminary Closing",
+					"insert_after": "custom_preliminary_closed",
+					"allow_on_submit": 1,
+					"read_only": 1,
+					"no_copy": 1,
+				},
+			],
 			"POS Invoice": [
 				{
 					"fieldname": "posa_pos_opening_shift",

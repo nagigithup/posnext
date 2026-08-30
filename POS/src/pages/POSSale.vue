@@ -531,7 +531,7 @@
 				v-if="canSubmitPreliminaryClosing"
 				v-model="uiStore.showPreliminaryClosingDialog"
 				:opening-shift="shiftStore.currentShift?.name"
-				@submitted="preliminarySubmitted = true"
+				@submitted="handlePreliminaryClosingSubmitted"
 			/>
 
 			<!-- Draft Invoices Dialog -->
@@ -1869,6 +1869,18 @@ async function handleShiftClosed() {
 			uiStore.showOpenShiftDialog = true;
 		}, 500);
 	}
+}
+
+async function handlePreliminaryClosingSubmitted() {
+	preliminarySubmitted.value = true;
+	shiftStore.clearShift();
+	cartStore.clearCart();
+	bootstrapStore.reset();
+	await bootstrapStore.loadInitialData();
+
+	setTimeout(() => {
+		uiStore.showOpenShiftDialog = true;
+	}, 500);
 }
 
 function handleItemSelected(item, autoAdd = false) {

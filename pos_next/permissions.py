@@ -25,7 +25,7 @@ def has_preliminary_closing_permission(doc, user=None, permission_type=None):
 	user = user or frappe.session.user
 	roles = set(frappe.get_roles(user))
 	if roles.intersection(PRELIMINARY_REVIEW_ROLES):
-		return None
+		return True
 	if not roles.intersection(CASHIER_ROLES):
 		return False
 	if permission_type == "create":
@@ -49,7 +49,7 @@ def has_official_closing_permission(doc, user=None, permission_type=None):
 	user = user or frappe.session.user
 	roles = set(frappe.get_roles(user))
 	if roles.intersection(PRELIMINARY_REVIEW_ROLES):
-		return None
+		return True
 	if roles.intersection(CASHIER_ROLES):
 		return False
 	return None

@@ -73,16 +73,32 @@ def check_opening_shift(user=None):
 	if not user:
 		user = frappe.session.user
 
-	open_shifts = frappe.db.get_all(
-		"POS Opening Shift",
-		filters={
-			"user": user,
-			"pos_closing_shift": ["is", "not set"],
-			"docstatus": 1,
-			"status": "Open",
-		},
-		fields=["name", "pos_profile", "period_start_date"],
-		order_by="period_start_date desc",
+	preliminary_closed_condition = (
+		"AND IFNULL(opening.custom_preliminary_closed, 0) = 0"
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed")
+		else ""
+	)
+	open_shifts = frappe.db.sql(
+		f"""
+		SELECT opening.name, opening.pos_profile, opening.period_start_date
+		FROM `tabPOS Opening Shift` opening
+		LEFT JOIN `tabCashier Preliminary Closing` preliminary
+		       ON preliminary.pos_opening_shift = opening.name
+		      AND preliminary.docstatus < 2
+		LEFT JOIN `tabPOS Closing Shift` closing
+		       ON closing.pos_opening_shift = opening.name
+		      AND closing.docstatus < 2
+		WHERE opening.user = %s
+		  AND IFNULL(opening.pos_closing_shift, '') = ''
+		  AND opening.docstatus = 1
+		  AND opening.status = 'Open'
+		  {preliminary_closed_condition}
+		  AND preliminary.name IS NULL
+		  AND closing.name IS NULL
+		ORDER BY opening.period_start_date DESC
+		""",
+		(user,),
+		as_dict=True,
 	)
 
 	if not open_shifts:

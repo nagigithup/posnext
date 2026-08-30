@@ -53,6 +53,8 @@ def remove_custom_fields():
 			"Sales Invoice-posa_is_printed",
 			"POS Profile-posa_network_mode_of_payment",
 			"POS Closing Shift-custom_preliminary_closing",
+			"POS Opening Shift-custom_preliminary_closed",
+			"POS Opening Shift-custom_preliminary_closing",
 			"POS Invoice-posa_pos_opening_shift",
 			"POS Invoice-posa_is_printed",
 		]

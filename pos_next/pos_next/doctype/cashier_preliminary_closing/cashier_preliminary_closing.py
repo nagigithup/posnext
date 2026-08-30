@@ -45,6 +45,7 @@ class CashierPreliminaryClosing(Document):
 		self._load_authoritative_shift_data()
 		self._validate_duplicates(for_submission=True)
 		self.pos_closing_shift = self._create_official_draft()
+		self._mark_opening_shift_operationally_closed()
 
 	def _validate_cashier(self):
 		if frappe.session.user == "Guest":
@@ -56,10 +57,14 @@ class CashierPreliminaryClosing(Document):
 		if not self.pos_opening_shift:
 			frappe.throw(_("POS Opening Shift is required."))
 
+		fields = ["name", "company", "pos_profile", "user", "period_start_date", "status", "docstatus"]
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed"):
+			fields.append("custom_preliminary_closed")
+
 		opening = frappe.db.get_value(
 			"POS Opening Shift",
 			self.pos_opening_shift,
-			["name", "company", "pos_profile", "user", "period_start_date", "status", "docstatus"],
+			fields,
 			as_dict=True,
 		)
 		if not opening:
@@ -68,6 +73,8 @@ class CashierPreliminaryClosing(Document):
 			frappe.throw(_("You cannot close another cashier's shift."), frappe.PermissionError)
 		if opening.docstatus != 1 or opening.status != "Open":
 			frappe.throw(_("The selected POS Opening Shift is not open."))
+		if opening.get("custom_preliminary_closed"):
+			frappe.throw(_("The selected POS Opening Shift is already preliminarily closed."))
 
 		self.company = opening.company
 		self.pos_profile = opening.pos_profile
@@ -189,3 +196,19 @@ class CashierPreliminaryClosing(Document):
 		closing_doc.flags.ignore_permissions = True
 		closing_doc.insert(ignore_permissions=True)
 		return closing_doc.name
+
+	def _mark_opening_shift_operationally_closed(self):
+		"""End the cashier-facing session without submitting the official close."""
+		if not frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed"):
+			return
+
+		values = {"custom_preliminary_closed": 1}
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closing"):
+			values["custom_preliminary_closing"] = self.name
+
+		frappe.db.set_value(
+			"POS Opening Shift",
+			self.pos_opening_shift,
+			values,
+			update_modified=False,
+		)

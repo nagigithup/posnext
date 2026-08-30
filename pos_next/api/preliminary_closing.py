@@ -26,8 +26,13 @@ def _require_cashier():
 
 
 def _get_valid_opening_shifts():
+	preliminary_closed_condition = (
+		"AND IFNULL(opening.custom_preliminary_closed, 0) = 0"
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed")
+		else ""
+	)
 	return frappe.db.sql(
-		"""
+		f"""
 		SELECT opening.name AS pos_opening_shift,
 		       opening.company,
 		       opening.pos_profile,
@@ -43,6 +48,7 @@ def _get_valid_opening_shifts():
 		WHERE opening.user = %s
 		  AND opening.docstatus = 1
 		  AND opening.status = 'Open'
+		  {preliminary_closed_condition}
 		  AND preliminary.name IS NULL
 		  AND closing.name IS NULL
 		ORDER BY opening.period_start_date DESC

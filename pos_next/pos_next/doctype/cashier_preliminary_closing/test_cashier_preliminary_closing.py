@@ -68,10 +68,12 @@ class TestCashierPreliminaryClosing(unittest.TestCase):
 			_load_authoritative_shift_data=MagicMock(),
 			_validate_duplicates=MagicMock(),
 			_create_official_draft=MagicMock(return_value="CLOSE-1"),
+			_mark_opening_shift_operationally_closed=MagicMock(),
 			pos_closing_shift=None,
 		)
 		CashierPreliminaryClosing.before_submit(doc)
 		doc._create_official_draft.assert_called_once_with()
+		doc._mark_opening_shift_operationally_closed.assert_called_once_with()
 		self.assertEqual(doc.pos_closing_shift, "CLOSE-1")
 
 	def test_cash_declaration_maps_to_configured_row(self):
@@ -121,7 +123,11 @@ class TestCashierPreliminaryClosing(unittest.TestCase):
 
 	def test_accountant_can_access_official_closing(self):
 		with patch("pos_next.permissions.frappe.get_roles", return_value=["Accounts User"]):
-			self.assertIsNone(has_official_closing_permission(SimpleNamespace()))
+			self.assertTrue(has_official_closing_permission(SimpleNamespace()))
+
+	def test_nexus_pos_manager_can_access_official_closing(self):
+		with patch("pos_next.permissions.frappe.get_roles", return_value=["Nexus POS Manager"]):
+			self.assertTrue(has_official_closing_permission(SimpleNamespace()))
 
 	def test_cashier_cannot_access_official_reconciliation(self):
 		with patch(
@@ -166,6 +172,19 @@ class TestCashierPreliminaryClosing(unittest.TestCase):
 		with patch.object(frappe.db, "sql", return_value=[("SHIFT-A",)]) as sql:
 			CashierPreliminaryClosing._lock_opening_shift(doc)
 		self.assertIn("FOR UPDATE", sql.call_args.args[0])
+
+	def test_preliminary_submission_marks_opening_shift_operationally_closed(self):
+		doc = SimpleNamespace(pos_opening_shift="SHIFT-A", name="CPC-1")
+		with patch.object(frappe.db, "has_column", return_value=True), patch.object(
+			frappe.db, "set_value"
+		) as set_value:
+			CashierPreliminaryClosing._mark_opening_shift_operationally_closed(doc)
+		set_value.assert_called_once_with(
+			"POS Opening Shift",
+			"SHIFT-A",
+			{"custom_preliminary_closed": 1, "custom_preliminary_closing": "CPC-1"},
+			update_modified=False,
+		)
 
 	def test_submit_api_returns_only_safe_identifiers(self):
 		doc = MagicMock(name="preliminary")
