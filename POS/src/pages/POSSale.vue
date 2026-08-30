@@ -2216,6 +2216,7 @@ async function handlePaymentCompleted(paymentData) {
 			const result = await cartStore.submitInvoice({
 				isCreditSale: Boolean(paymentData.is_credit_sale),
 				receivableAccount: paymentData.receivable_account || null,
+				changeAmount: paymentData.change_amount || 0,
 			});
 
 			if (result) {

@@ -580,24 +580,26 @@ def _process_invoice(invoice, invoice_field, company_currency, cash_mode, paymen
 	# reconciliation table stays clean.
 	known_modes = {pay.mode_of_payment for pay in payments}
 
+	payment_total = 0
+
 	# Aggregate each payment row's amount into the reconciliation buckets.
 	for p in invoice.payments:
 		amount = get_base_value(p, "amount", "base_amount", conversion_rate)
 		mode = p.mode_of_payment
+		payment_total += amount
 
 		if is_return and mode not in known_modes:
 			mode = cash_mode
 
 		_aggregate_payment(payments, mode, amount)
 
-	# Subtract change_amount once from the cash mode.  change_amount is an
-	# invoice-level field — the customer overpaid and received change back,
-	# so the drawer's net gain is (sum of cash rows - change).  Handling it
-	# outside the loop avoids double-subtraction when multiple payment rows
-	# share the same cash mode.
+	# New POS Next invoices store payment rows as accounting-paid amounts,
+	# excluding immediate cash change.  Older tendered-style rows may still
+	# include change, so subtract only the excess above the invoice total.
 	base_change = get_base_value(invoice, "change_amount", "base_change_amount", conversion_rate)
-	if base_change:
-		_aggregate_payment(payments, cash_mode, -base_change)
+	tendered_excess = payment_total - base_grand_total
+	if base_change and tendered_excess > 0:
+		_aggregate_payment(payments, cash_mode, -min(base_change, tendered_excess))
 
 	return transaction
 

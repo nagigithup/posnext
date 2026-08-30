@@ -3368,6 +3368,34 @@ function clearAll() {
 	customAmount.value = "";
 }
 
+function getAccountingPaymentData() {
+	let remainingDue = roundCurrency(props.grandTotal);
+	let changeReturned = 0;
+
+	const accountingPayments = paymentEntries.value
+		.map((entry) => {
+			const tendered = roundCurrency(entry.amount || 0);
+			const accountingAmount = Math.min(tendered, Math.max(remainingDue, 0));
+			remainingDue = roundCurrency(remainingDue - accountingAmount);
+			changeReturned = roundCurrency(changeReturned + Math.max(tendered - accountingAmount, 0));
+
+			return {
+				...entry,
+				amount: roundCurrency(accountingAmount),
+			};
+		})
+		.filter((entry) => entry.amount > 0);
+
+	return {
+		accountingPayments,
+		accountingPaidAmount: roundCurrency(
+			accountingPayments.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+		),
+		changeReturned,
+		outstandingAmount: Math.max(roundCurrency(remainingDue), 0),
+	};
+}
+
 function completePayment() {
 	log.debug("[PaymentDialog] Complete payment called:", {
 		canComplete: canComplete.value,
@@ -3392,17 +3420,21 @@ function completePayment() {
 	// debit_to). Tendered payments are real money; whatever is left (grand_total − tendered)
 	// stays outstanding on that account — it is NOT a payment row.
 	const receivableAccount = selectedReceivableAccount.value || null;
+	const { accountingPayments, accountingPaidAmount, changeReturned, outstandingAmount } =
+		getAccountingPaymentData();
 
 	// Partial when the tendered amount (plus write-off) doesn't cover the total.
-	const effectivePaid = totalPaid.value + writeOffAmount.value;
+	const effectivePaid = accountingPaidAmount + writeOffAmount.value;
 	const isPartial = effectivePaid < props.grandTotal;
-	const outstanding = isPartial ? roundCurrency(props.grandTotal - effectivePaid) : 0;
+	const outstanding = isPartial
+		? roundCurrency(Math.max(outstandingAmount - writeOffAmount.value, 0))
+		: 0;
 
 	const paymentData = {
-		payments: paymentEntries.value,
-		change_amount: changeAmount.value,
+		payments: accountingPayments,
+		change_amount: changeReturned,
 		is_partial_payment: isPartial,
-		paid_amount: totalPaid.value,
+		paid_amount: accountingPaidAmount,
 		outstanding_amount: outstanding,
 		sales_team: selectedSalesPersons.value.length > 0 ? selectedSalesPersons.value : null,
 		delivery_date: isSalesOrder.value ? deliveryDate.value : null,

@@ -417,6 +417,62 @@ def _set_payment_accounts(payments, company):
 			)
 
 
+def _set_payment_amount(payment, amount):
+	if hasattr(payment, "set") and callable(payment.set):
+		payment.set("amount", amount)
+	else:
+		payment["amount"] = amount
+
+
+def _set_payment_base_amount(payment, amount):
+	if hasattr(payment, "set") and callable(payment.set):
+		payment.set("base_amount", amount)
+	else:
+		payment["base_amount"] = amount
+
+
+def _get_payment_amount(payment):
+	return flt(payment.get("amount") or 0)
+
+
+def _get_row_precision(row, fieldname, default=2):
+	if hasattr(row, "precision") and callable(row.precision):
+		return row.precision(fieldname)
+	return default
+
+
+def _cap_pos_payment_amounts_to_invoice_due(invoice_doc):
+	"""Keep POS payment rows to accounting-paid amounts, not cash tendered.
+
+	For POS over-tender, the excess is immediate change returned to the customer.
+	It must not become paid_amount, customer credit, advance, rounding, or GL.
+	"""
+	if not cint(invoice_doc.get("is_pos")) or invoice_doc.get("is_return") or not invoice_doc.get("payments"):
+		return
+
+	remaining_due = flt(invoice_doc.get("grand_total") or 0, invoice_doc.precision("grand_total"))
+	if remaining_due <= 0:
+		return
+
+	conversion_rate = flt(invoice_doc.get("conversion_rate") or 1)
+	change_returned = 0
+	for payment in invoice_doc.payments:
+		tendered = _get_payment_amount(payment)
+		accounting_paid = min(tendered, max(remaining_due, 0))
+		change_returned += max(tendered - accounting_paid, 0)
+		remaining_due -= accounting_paid
+		_set_payment_amount(payment, flt(accounting_paid, _get_row_precision(payment, "amount")))
+		_set_payment_base_amount(
+			payment,
+			flt(accounting_paid * conversion_rate, _get_row_precision(payment, "base_amount")),
+		)
+
+	existing_change = flt(invoice_doc.get("change_amount") or 0)
+	invoice_doc.change_amount = flt(max(existing_change, change_returned))
+	if invoice_doc.meta.has_field("base_change_amount"):
+		invoice_doc.base_change_amount = flt(invoice_doc.change_amount * conversion_rate)
+
+
 # ==========================================
 # Stock Validation Functions
 # ==========================================
@@ -956,6 +1012,8 @@ def update_invoice(data):
 		if invoice_doc.base_grand_total is None:
 			invoice_doc.base_grand_total = 0.0
 
+		_cap_pos_payment_amounts_to_invoice_due(invoice_doc)
+
 		# Set accounts for payment methods before saving
 		_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
@@ -1361,6 +1419,11 @@ def submit_invoice(invoice=None, data=None):
 
 		# Set accounts for all payment methods before saving
 		if doctype == "Sales Invoice" and hasattr(invoice_doc, "payments"):
+			if flt(data.get("change_amount") or invoice.get("change_amount") or 0):
+				invoice_doc.change_amount = flt(
+					data.get("change_amount") or invoice.get("change_amount") or 0
+				)
+			_cap_pos_payment_amounts_to_invoice_due(invoice_doc)
 			_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
 		# Handle sales team (multiple sales persons)

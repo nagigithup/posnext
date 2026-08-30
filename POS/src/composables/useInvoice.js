@@ -959,7 +959,8 @@ export function useInvoice() {
 		deliveryDate = null,
 		writeOffAmount = 0,
 		isCreditSale = false,
-		receivableAccount = null
+		receivableAccount = null,
+		changeAmount = 0
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1037,7 +1038,8 @@ export function useInvoice() {
 				}
 
 				const submitData = {
-					change_amount: remainingAmount.value < 0 ? Math.abs(remainingAmount.value) : 0,
+					change_amount:
+						changeAmount || (remainingAmount.value < 0 ? Math.abs(remainingAmount.value) : 0),
 					write_off_amount: writeOffAmount || 0,
 				};
 

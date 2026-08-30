@@ -288,7 +288,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			deliveryDate.value,
 			writeOffAmount.value,
 			Boolean(options.isCreditSale),
-			options.receivableAccount || null
+			options.receivableAccount || null,
+			options.changeAmount || 0
 		);
 		// Reset write-off amount after successful submission
 		if (result) {

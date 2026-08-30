@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from pos_next.api import preliminary_closing as api
+from pos_next.api.invoices import _cap_pos_payment_amounts_to_invoice_due
 from pos_next.permissions import has_official_closing_permission, has_preliminary_closing_permission
 from pos_next.pos_next.doctype.cashier_preliminary_closing.cashier_preliminary_closing import (
 	CashierPreliminaryClosing,
@@ -11,6 +12,7 @@ from pos_next.pos_next.doctype.cashier_preliminary_closing.cashier_preliminary_c
 )
 from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import (
 	POSClosingShift,
+	_process_invoice,
 	get_pos_invoices,
 	get_supported_invoice_sources,
 	validate_official_closing_access,
@@ -197,6 +199,86 @@ class TestCashierPreliminaryClosing(unittest.TestCase):
 		)
 		doc.insert.assert_called_once_with()
 		doc.submit.assert_called_once_with()
+
+	def test_pos_cash_tendered_is_capped_to_invoice_due(self):
+		invoice = frappe._dict(
+			is_pos=1,
+			is_return=0,
+			grand_total=54.8,
+			change_amount=0,
+			payments=[frappe._dict(amount=55)],
+			meta=SimpleNamespace(has_field=lambda fieldname: fieldname == "base_change_amount"),
+			conversion_rate=1,
+		)
+		invoice.precision = lambda fieldname: 2
+
+		_cap_pos_payment_amounts_to_invoice_due(invoice)
+
+		self.assertAlmostEqual(invoice.payments[0].amount, 54.8, places=2)
+		self.assertAlmostEqual(invoice.change_amount, 0.2, places=2)
+		self.assertAlmostEqual(invoice.base_change_amount, 0.2, places=2)
+
+	def test_closing_does_not_subtract_change_from_capped_payment_rows(self):
+		invoice = frappe._dict(
+			name="SI-1",
+			posting_date="2026-08-30",
+			grand_total=54.8,
+			base_grand_total=54.8,
+			net_total=54.8,
+			base_net_total=54.8,
+			total_qty=1,
+			customer="Walk In",
+			is_return=0,
+			change_amount=0.2,
+			base_change_amount=0.2,
+			payments=[frappe._dict(mode_of_payment="Cash AED", amount=54.8, base_amount=54.8)],
+			taxes=[],
+		)
+		payments = []
+		summary = {
+			"grand_total": 0,
+			"net_total": 0,
+			"total_quantity": 0,
+			"returns_total": 0,
+			"returns_count": 0,
+			"sales_total": 0,
+			"sales_count": 0,
+		}
+
+		_process_invoice(invoice, "sales_invoice", "AED", "Cash AED", payments, [], summary)
+
+		self.assertAlmostEqual(payments[0].expected_amount, 54.8, places=2)
+
+	def test_closing_subtracts_change_from_legacy_tendered_payment_rows(self):
+		invoice = frappe._dict(
+			name="SI-1",
+			posting_date="2026-08-30",
+			grand_total=54.8,
+			base_grand_total=54.8,
+			net_total=54.8,
+			base_net_total=54.8,
+			total_qty=1,
+			customer="Walk In",
+			is_return=0,
+			change_amount=0.2,
+			base_change_amount=0.2,
+			payments=[frappe._dict(mode_of_payment="Cash AED", amount=55, base_amount=55)],
+			taxes=[],
+		)
+		payments = []
+		summary = {
+			"grand_total": 0,
+			"net_total": 0,
+			"total_quantity": 0,
+			"returns_total": 0,
+			"returns_count": 0,
+			"sales_total": 0,
+			"sales_count": 0,
+		}
+
+		_process_invoice(invoice, "sales_invoice", "AED", "Cash AED", payments, [], summary)
+
+		self.assertAlmostEqual(payments[0].expected_amount, 54.8, places=2)
 
 	@staticmethod
 	def _closing(rows):
