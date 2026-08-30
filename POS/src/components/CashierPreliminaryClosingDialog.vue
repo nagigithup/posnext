@@ -106,7 +106,12 @@ const open = computed({
 watch(
 	() => props.modelValue,
 	(value) => {
-		if (value && !submitted.value) loadContext()
+		if (value) {
+			resetDialogState()
+			loadContext()
+		} else if (!submitting.value) {
+			resetDialogState()
+		}
 	},
 )
 
@@ -140,6 +145,7 @@ async function submitDeclaration() {
 			network_amount: networkAmount.value,
 		})
 		submitted.value = true
+		emit("update:modelValue", false)
 		emit("submitted")
 	} catch (error) {
 		errorMessage.value = getErrorMessage(error)
@@ -158,5 +164,14 @@ function formatDateTime(value) {
 
 function getErrorMessage(error) {
 	return error?.messages?.[0] || error?.message || "تعذر إرسال الإقفال المبدئي."
+}
+
+function resetDialogState() {
+	context.value = null
+	cashAmount.value = null
+	networkAmount.value = null
+	loading.value = false
+	submitted.value = false
+	errorMessage.value = ""
 }
 </script>

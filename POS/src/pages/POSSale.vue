@@ -1873,6 +1873,8 @@ async function handleShiftClosed() {
 
 async function handlePreliminaryClosingSubmitted() {
 	preliminarySubmitted.value = true;
+	uiStore.showPreliminaryClosingDialog = false;
+	uiStore.showCloseShiftDialog = false;
 	shiftStore.clearShift();
 	cartStore.clearCart();
 	bootstrapStore.reset();
