@@ -76,6 +76,9 @@ function receiptDocFromQueuedInvoice(offlineId, raw) {
 		payments,
 		paid_amount: paidAmount,
 		change_amount: Number.parseFloat(raw.change_amount) || 0,
+		custom_tendered_amount: raw.custom_tendered_amount ?? null,
+		custom_change_returned:
+			raw.custom_change_returned ?? (Number.parseFloat(raw.change_amount) || 0),
 		outstanding_amount: Math.max(0, grandTotal - paidAmount),
 		status: grandTotal - paidAmount < 0.01 ? "Paid" : "Unpaid",
 		docstatus: 0,
@@ -286,11 +289,24 @@ export function buildReceiptHTML(invoiceData) {
 								paidAmount
 						  )}</span></div>
 					${
-						invoiceData.change_amount && invoiceData.change_amount > 0
+						invoiceData.custom_tendered_amount != null
 							? `<div class="payment-row" style="font-weight: bold; margin-top: 5px;"><span>${__(
-									"Change:"
-							  )}</span><span>${formatCurrency(
-									invoiceData.change_amount
+									"المبلغ المدفوع"
+							  )}<br><small>${__(
+									"Received / Tendered"
+							  )}</small></span><span>${formatCurrency(
+									invoiceData.custom_tendered_amount
+							  )}</span></div>`
+							: ""
+					}
+					${
+						(invoiceData.custom_change_returned ?? invoiceData.change_amount) > 0
+							? `<div class="payment-row" style="font-weight: bold; margin-top: 5px;"><span>${__(
+									"المبلغ المرتجع"
+							  )}<br><small>${__(
+									"Change Returned"
+							  )}</small></span><span>${formatCurrency(
+									invoiceData.custom_change_returned ?? invoiceData.change_amount
 							  )}</span></div>`
 							: ""
 					}

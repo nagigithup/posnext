@@ -2119,6 +2119,9 @@ async function handlePaymentCompleted(paymentData) {
 				total_discount: cartStore.totalDiscount,
 				write_off_amount: paymentData.write_off_amount || 0,
 				change_amount: paymentData.change_amount || 0,
+				custom_tendered_amount: paymentData.custom_tendered_amount ?? null,
+				custom_change_returned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 				is_credit_sale: paymentData.is_credit_sale ? 1 : 0,
 				receivable_account: paymentData.receivable_account || null,
 				edited_from: editingOfflineContext?.originalOfflineId || null,
@@ -2170,6 +2173,9 @@ async function handlePaymentCompleted(paymentData) {
 				payments: invoiceData.payments,
 				paid_amount: paidAmount,
 				change_amount: paymentData.change_amount || 0,
+				custom_tendered_amount: paymentData.custom_tendered_amount ?? null,
+				custom_change_returned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 				outstanding_amount: Math.max(0, grandTotal - paidAmount),
 				status: Math.max(0, grandTotal - paidAmount) < 0.01 ? "Paid" : "Unpaid",
 				docstatus: 0,
@@ -2217,6 +2223,9 @@ async function handlePaymentCompleted(paymentData) {
 				isCreditSale: Boolean(paymentData.is_credit_sale),
 				receivableAccount: paymentData.receivable_account || null,
 				changeAmount: paymentData.change_amount || 0,
+				tenderedAmount: paymentData.custom_tendered_amount ?? null,
+				changeReturned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 			});
 
 			if (result) {

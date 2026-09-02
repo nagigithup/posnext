@@ -3396,6 +3396,24 @@ function getAccountingPaymentData() {
 	};
 }
 
+function getHistoricalTenderedAmount() {
+	const totalTendered = roundCurrency(
+		paymentEntries.value.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+	);
+	const cashTendered = roundCurrency(
+		paymentEntries.value
+			.filter((entry) => {
+				const method = paymentMethods.value.find(
+					(pm) => pm.mode_of_payment === entry.mode_of_payment
+				);
+				return isCashPaymentMethod(method);
+			})
+			.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+	);
+
+	return cashTendered > 0 ? cashTendered : totalTendered;
+}
+
 function completePayment() {
 	log.debug("[PaymentDialog] Complete payment called:", {
 		canComplete: canComplete.value,
@@ -3433,6 +3451,8 @@ function completePayment() {
 	const paymentData = {
 		payments: accountingPayments,
 		change_amount: changeReturned,
+		custom_tendered_amount: getHistoricalTenderedAmount(),
+		custom_change_returned: changeReturned,
 		is_partial_payment: isPartial,
 		paid_amount: accountingPaidAmount,
 		outstanding_amount: outstanding,

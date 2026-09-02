@@ -92,6 +92,7 @@ fixtures = [
 		"filters": [["role_name", "in", ["Cashier", "POSNext Cashier", "Nexus POS Manager"]]],
 	},
 	{"dt": "Custom DocPerm", "filters": [["role", "in", ["POSNext Cashier"]]]},
+	{"dt": "Print Format", "filters": [["name", "=", "POS Next Receipt"]]},
 ]
 
 permission_query_conditions = {

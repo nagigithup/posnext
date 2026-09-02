@@ -960,7 +960,9 @@ export function useInvoice() {
 		writeOffAmount = 0,
 		isCreditSale = false,
 		receivableAccount = null,
-		changeAmount = 0
+		changeAmount = 0,
+		tenderedAmount = null,
+		changeReturned = null
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1007,6 +1009,13 @@ export function useInvoice() {
 					update_stock: 1, // Critical: Ensures stock is updated
 				};
 
+				if (tenderedAmount != null) {
+					invoiceData.custom_tendered_amount = tenderedAmount;
+				}
+				if (changeReturned != null) {
+					invoiceData.custom_change_returned = changeReturned;
+				}
+
 				// "Pay on Receivable Account": route the invoice's debit_to to a chosen AR
 				if (receivableAccount) {
 					invoiceData.receivable_account = receivableAccount;
@@ -1042,6 +1051,13 @@ export function useInvoice() {
 						changeAmount || (remainingAmount.value < 0 ? Math.abs(remainingAmount.value) : 0),
 					write_off_amount: writeOffAmount || 0,
 				};
+
+				if (tenderedAmount != null) {
+					submitData.custom_tendered_amount = tenderedAmount;
+				}
+				if (changeReturned != null) {
+					submitData.custom_change_returned = changeReturned;
+				}
 
 				if (redeemedCustomerCredit > 0 && customerCreditDict.length > 0) {
 					submitData.redeemed_customer_credit = redeemedCustomerCredit;

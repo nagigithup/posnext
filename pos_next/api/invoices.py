@@ -473,6 +473,22 @@ def _cap_pos_payment_amounts_to_invoice_due(invoice_doc):
 		invoice_doc.base_change_amount = flt(invoice_doc.change_amount * conversion_rate)
 
 
+def _set_pos_tendered_display_fields(invoice_doc, invoice=None, data=None):
+	"""Persist POS display-only tendered/change values when the custom fields exist."""
+	invoice = invoice or {}
+	data = data or {}
+	if invoice_doc.doctype != DOCTYPE_SALES_INVOICE:
+		return
+
+	tendered_amount = data.get("custom_tendered_amount", invoice.get("custom_tendered_amount"))
+	change_returned = data.get("custom_change_returned", invoice.get("custom_change_returned"))
+
+	if tendered_amount is not None and invoice_doc.meta.has_field("custom_tendered_amount"):
+		invoice_doc.custom_tendered_amount = flt(tendered_amount)
+	if change_returned is not None and invoice_doc.meta.has_field("custom_change_returned"):
+		invoice_doc.custom_change_returned = flt(change_returned)
+
+
 # ==========================================
 # Stock Validation Functions
 # ==========================================
@@ -1423,6 +1439,7 @@ def submit_invoice(invoice=None, data=None):
 				invoice_doc.change_amount = flt(
 					data.get("change_amount") or invoice.get("change_amount") or 0
 				)
+			_set_pos_tendered_display_fields(invoice_doc, invoice=invoice, data=data)
 			_cap_pos_payment_amounts_to_invoice_due(invoice_doc)
 			_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
@@ -1636,6 +1653,8 @@ def submit_invoice(invoice=None, data=None):
 			"outstanding_amount": getattr(invoice_doc, "outstanding_amount", 0),
 			"paid_amount": getattr(invoice_doc, "paid_amount", 0),
 			"change_amount": getattr(invoice_doc, "change_amount", 0),
+			"custom_tendered_amount": getattr(invoice_doc, "custom_tendered_amount", 0),
+			"custom_change_returned": getattr(invoice_doc, "custom_change_returned", 0),
 		}
 
 		# Include offline_id in response for client-side tracking
