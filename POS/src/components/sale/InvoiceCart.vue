@@ -396,6 +396,9 @@
 							v-for="(cust, index) in customerResults"
 							:key="cust.name"
 							@mousedown.prevent="selectCustomer(cust)"
+							@keydown.enter.stop.prevent="selectCustomer(cust)"
+							:ref="(element) => setCustomerResultRef(element, index)"
+							@focus="selectedIndex = index"
 							:class="[
 								'w-full text-start px-2 py-1.5 flex items-center gap-1.5 border-b border-gray-100 last:border-0 touch-manipulation select-none cursor-pointer active:bg-blue-200',
 								index === selectedIndex
@@ -919,6 +922,14 @@
 						(item.is_free_item ? '-free' : '')
 					"
 					@click="item.is_free_item ? null : openEditDialog(item)"
+					:ref="(element) => setCartRowRef(element, index)"
+					:tabindex="item.is_free_item ? -1 : 0"
+					:role="item.is_free_item ? undefined : 'button'"
+					:aria-label="item.is_free_item ? undefined : __('Edit {0}', [item.item_name])"
+					@focus="focusedCartRow = index"
+					@keydown.enter.self.stop.prevent="openEditDialog(item)"
+					@keydown.down.self.stop.prevent="moveCartRowFocus(1)"
+					@keydown.up.self.stop.prevent="moveCartRowFocus(-1)"
 					:class="[
 						'border rounded-md p-1.5 sm:p-2 transition-all duration-200',
 						item.is_free_item
@@ -1465,6 +1476,7 @@ const log = logger.create("InvoiceCart");
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import EditItemDialog from "./EditItemDialog.vue";
+import { focusPOSItemSearch, moveListFocus } from "@/utils/keyboardNavigation";
 
 /**
  * ============================================================================
@@ -1589,12 +1601,38 @@ const customerSearchFocused = ref(false); // Track if search input is focused
 const allCustomers = computed(() => customerSearchStore.allCustomers);
 const customersLoaded = computed(() => customerSearchStore.allCustomers.length > 0);
 const selectedIndex = ref(-1); // Keyboard navigation index for search results
+const customerResultRefs = ref([]);
+const cartRowRefs = ref([]);
+const focusedCartRow = ref(-1);
+
+function setCartRowRef(element, index) {
+	if (element) cartRowRefs.value[index] = element;
+}
+
+function setCustomerResultRef(element, index) {
+	if (element) customerResultRefs.value[index] = element;
+}
+
+watch(selectedIndex, (index) => {
+	if (index < 0) return;
+	nextTick(() => customerResultRefs.value[index]?.scrollIntoView?.({ block: "nearest" }));
+});
+
+function moveCartRowFocus(delta) {
+	const rows = cartRowRefs.value.filter(Boolean);
+	const currentIndex = rows.indexOf(document.activeElement);
+	focusedCartRow.value = moveListFocus(rows, currentIndex, delta);
+}
 const availableGiftCards = ref([]); // Available gift cards for current customer
 const previousCustomer = ref(null); // Store previous customer for restore on blur
 
 // Edit item dialog state
 const showEditDialog = ref(false); // Controls edit dialog visibility
 const selectedItem = ref(null); // Item being edited
+
+watch(showEditDialog, (isOpen, wasOpen) => {
+	if (wasOpen && !isOpen) focusPOSItemSearch();
+});
 
 // UOM dropdown state - tracks which item's UOM dropdown is open (by item_code)
 const openUomDropdown = ref(null);
@@ -1842,24 +1880,32 @@ function handleSearchBlur() {
  * @param {KeyboardEvent} event - Keyboard event from search input
  */
 function handleKeydown(event) {
+	if (event.key === "Escape") {
+		event.preventDefault();
+		event.stopPropagation();
+		customerSearch.value = "";
+		customerSearchFocused.value = false;
+		return;
+	}
 	if (customerResults.value.length === 0) return;
 
 	if (event.key === "ArrowDown") {
 		event.preventDefault();
+		event.stopPropagation();
 		selectedIndex.value = Math.min(selectedIndex.value + 1, customerResults.value.length - 1);
 	} else if (event.key === "ArrowUp") {
 		event.preventDefault();
+		event.stopPropagation();
 		selectedIndex.value = Math.max(selectedIndex.value - 1, -1);
 	} else if (event.key === "Enter") {
 		event.preventDefault();
+		event.stopPropagation();
 		if (selectedIndex.value >= 0 && selectedIndex.value < customerResults.value.length) {
 			selectCustomer(customerResults.value[selectedIndex.value]);
 		} else if (customerResults.value.length === 1) {
 			// Auto-select if only one result
 			selectCustomer(customerResults.value[0]);
 		}
-	} else if (event.key === "Escape") {
-		customerSearch.value = "";
 	}
 }
 
@@ -1877,6 +1923,7 @@ function selectCustomer(cust) {
 	selectedIndex.value = -1;
 	customerSearchFocused.value = false;
 	previousCustomer.value = null;
+	focusPOSItemSearch();
 }
 
 /**

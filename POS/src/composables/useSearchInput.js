@@ -20,18 +20,33 @@ import { QueuedMutex } from "@/utils/mutex";
  * @param {Object} options.itemStore          - Pinia item-search store
  * @param {(item: Object, autoAdd: boolean) => boolean} options.onItemFound
  *        Component's selectItem(). Returns true if item was accepted.
- * @param {Object} options.showWarning        - useToast().showWarning
  * @param {import('vue').Ref<boolean>} options.isAnyDialogOpen
  */
-export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialogOpen }) {
+export function useSearchInput({
+	itemStore,
+	onItemFound,
+	isAnyDialogOpen,
+	onNavigateResults = null,
+	onSelectHighlighted = null,
+}) {
 	// --- Reactive state (exposed) ---
 	const searchInputRef = ref(null);
-	const scannerEnabled = ref(false);
 	const autoAddEnabled = ref(false);
 
 	// --- Internal (non-reactive) ---
 	let autoSearchTimer = null;
-	const barcodeQueue = new QueuedMutex({ timeout: 10000, name: "BarcodeSearch" });
+	let inputGeneration = 0;
+	let inputStartedAt = 0;
+	let lastInputAt = 0;
+	let recordedCharacters = 0;
+	let previousInputValue = "";
+	const barcodeQueue = new QueuedMutex({
+		timeout: 10000,
+		name: "BarcodeSearch",
+	});
+	const SCANNER_MIN_LENGTH = 6;
+	const SCANNER_MAX_AVERAGE_GAP_MS = 50;
+	const SCANNER_ENTER_GAP_MS = 120;
 
 	// ---- Timer helpers ----
 
@@ -52,41 +67,87 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 		});
 	}
 
+	function resetInputTiming() {
+		inputStartedAt = 0;
+		lastInputAt = 0;
+		recordedCharacters = 0;
+		previousInputValue = "";
+	}
+
+	function recordInputTiming(value, now = performance.now()) {
+		const addedCharacters = Math.max(0, value.length - previousInputValue.length);
+		const continuedInput =
+			addedCharacters > 0 && lastInputAt && now - lastInputAt <= SCANNER_MAX_AVERAGE_GAP_MS * 2;
+
+		if (!continuedInput) {
+			inputStartedAt = now;
+			recordedCharacters = addedCharacters || value.length;
+		} else {
+			recordedCharacters += addedCharacters;
+		}
+
+		lastInputAt = now;
+		previousInputValue = value;
+	}
+
+	function isLikelyScannerEntry(value, now = performance.now()) {
+		if (value.length < SCANNER_MIN_LENGTH || recordedCharacters < value.length || !lastInputAt) {
+			return false;
+		}
+		const averageGap =
+			recordedCharacters > 1 ? (lastInputAt - inputStartedAt) / (recordedCharacters - 1) : 0;
+		return averageGap <= SCANNER_MAX_AVERAGE_GAP_MS && now - lastInputAt <= SCANNER_ENTER_GAP_MS;
+	}
+
 	// ---- Clear ----
 
 	/** Atomic clear: timer -> store -> DOM input.value -> refocus */
 	function clearSearchAndResetInput() {
 		clearAutoSearchTimer();
+		inputGeneration += 1;
 		itemStore.clearSearch();
 		if (searchInputRef.value) {
 			searchInputRef.value.value = "";
 		}
-		if (scannerEnabled.value || autoAddEnabled.value) {
-			focusSearchInput();
-		}
+		resetInputTiming();
+		focusSearchInput();
 	}
 
 	// ---- Event handlers ----
 
 	function handleKeyDown(event) {
-		if (event.key === "Enter") {
-			event.preventDefault();
-			clearAutoSearchTimer();
-
-			// Snapshot the barcode NOW from the DOM input, before anything overwrites it
-			const barcode = searchInputRef.value?.value?.trim() || itemStore.searchTerm?.trim();
-			if (barcode) {
-				// Clear input immediately so next scan starts clean
-				itemStore.clearSearch();
-				if (searchInputRef.value) searchInputRef.value.value = "";
-
-				// Queue the search with the captured barcode
-				processBarcodeScan(barcode, autoAddEnabled.value);
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			if (onNavigateResults?.(event.key === "ArrowDown" ? 1 : -1)) {
+				event.preventDefault();
+				event.stopPropagation?.();
 			}
 			return;
 		}
-		// All other keys: no special handling needed.
-		// Dead scanner-speed-detection code removed.
+
+		if (event.key === "Enter") {
+			event.preventDefault();
+			event.stopPropagation?.();
+			clearAutoSearchTimer();
+
+			const value = searchInputRef.value?.value?.trim() || itemStore.searchTerm?.trim();
+			if (!value) return;
+
+			const shouldTryBarcode =
+				/^\d+$/.test(value) || isLikelyScannerEntry(value) || autoAddEnabled.value;
+			if (shouldTryBarcode) {
+				const generation = inputGeneration;
+				itemStore.clearSearch();
+				if (searchInputRef.value) searchInputRef.value.value = "";
+				resetInputTiming();
+				processBarcodeScan(value, generation);
+			} else if (onSelectHighlighted?.()) {
+				clearSearchAndResetInput();
+			} else {
+				// Alphanumeric manual input remains a normal Item Code/Name/Barcode search.
+				itemStore.setSearchTerm(value);
+			}
+			return;
+		}
 	}
 
 	/**
@@ -100,6 +161,8 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 	 */
 	function handleSearchInput(event) {
 		const value = event.target.value;
+		inputGeneration += 1;
+		recordInputTiming(value);
 
 		// Guard: ignore stale empty events after search was already cleared
 		if (!value && !itemStore.searchTerm) {
@@ -110,15 +173,17 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 
 		clearAutoSearchTimer();
 
-		// Auto-add: after user stops typing for 500 ms, trigger barcode search
+		// Optional auto-add still performs an exact barcode attempt, then falls
+		// back to the same normal search if no barcode matches.
 		if (autoAddEnabled.value && value.trim().length > 0) {
 			autoSearchTimer = setTimeout(() => {
-				const barcode =
-					searchInputRef.value?.value?.trim() || itemStore.searchTerm?.trim();
-				if (barcode) {
+				const capturedValue = searchInputRef.value?.value?.trim() || itemStore.searchTerm?.trim();
+				if (capturedValue) {
+					const generation = inputGeneration;
 					itemStore.clearSearch();
 					if (searchInputRef.value) searchInputRef.value.value = "";
-					processBarcodeScan(barcode, true);
+					resetInputTiming();
+					processBarcodeScan(capturedValue, generation);
 				}
 			}, 500);
 		}
@@ -137,55 +202,39 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 	 * ensures scans execute one at a time so every scan is resolved before
 	 * the next begins, preventing double-adds and lost barcodes.
 	 *
-	 * Lookup: exact barcode match via `itemStore.searchByBarcode()`.
-	 * If the barcode is not found, shows a "not found" warning.
+	 * Lookup: exact match via the existing `itemStore.searchByBarcode()` flow.
+	 * A miss is restored into the unified field and sent through normal search.
 	 *
-	 * @param {string}  barcode      - Pre-captured barcode value
-	 * @param {boolean} forceAutoAdd - When true, item is added without user click
+	 * @param {string} value - Pre-captured input value
+	 * @param {number} generation - Input generation captured before clearing
 	 */
-	function processBarcodeScan(barcode, forceAutoAdd) {
-		const shouldAutoAdd = forceAutoAdd || (scannerEnabled.value && autoAddEnabled.value);
-
-		barcodeQueue.withLock(async () => {
+	function processBarcodeScan(value, generation) {
+		return barcodeQueue.withLock(async () => {
 			try {
-				const item = await itemStore.searchByBarcode(barcode);
+				const item = await itemStore.searchByBarcode(value);
 				if (item) {
-					onItemFound(item, shouldAutoAdd);
+					onItemFound(item, true);
 					focusSearchInput();
 					return;
 				}
-			} catch (error) {
-				console.error("Barcode API error:", error);
+			} catch {
+				// A barcode miss is expected for numeric Item Codes and normal searches.
 			}
 
-			// Barcode not found — show clear "not found" message.
-			// Note: we cannot fall back to filteredItems here because
-			// clearSearch() was called before the API request, so
-			// filteredItems would contain ALL cached items (not search results).
-			showWarning(__("Item Not Found: No item found with barcode: {0}", [barcode]));
+			// Do not overwrite a newer scan or manually entered query while this
+			// queued lookup was waiting for the API.
+			if (inputGeneration !== generation || searchInputRef.value?.value?.trim()) return;
+
+			if (searchInputRef.value) searchInputRef.value.value = value;
+			itemStore.setSearchTerm(value);
 			focusSearchInput();
 		});
 	}
 
 	// ---- Toggles ----
 
-	function toggleBarcodeScanner() {
-		scannerEnabled.value = !scannerEnabled.value;
-
-		if (scannerEnabled.value) {
-			autoAddEnabled.value = true;
-			focusSearchInput();
-		} else {
-			autoAddEnabled.value = false;
-		}
-	}
-
 	function toggleAutoAdd() {
 		autoAddEnabled.value = !autoAddEnabled.value;
-
-		if (autoAddEnabled.value && !scannerEnabled.value) {
-			scannerEnabled.value = true;
-		}
 
 		if (!autoAddEnabled.value) {
 			clearAutoSearchTimer();
@@ -197,9 +246,9 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 	}
 
 	// ---- Dialog-close watcher ----
-	// Refocuses the search bar when all dialogs close (scanner/auto-add modes)
+	// Keep the unified field ready for the next physical scan after dialogs close.
 	const stopDialogWatcher = watch(isAnyDialogOpen, (isOpen, wasOpen) => {
-		if (wasOpen && !isOpen && (scannerEnabled.value || autoAddEnabled.value)) {
+		if (wasOpen && !isOpen) {
 			focusSearchInput();
 		}
 	});
@@ -215,7 +264,6 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 	return {
 		// State
 		searchInputRef,
-		scannerEnabled,
 		autoAddEnabled,
 
 		// Event handlers
@@ -224,7 +272,6 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 		handleSearchClick,
 
 		// Toggles
-		toggleBarcodeScanner,
 		toggleAutoAdd,
 
 		// Utilities

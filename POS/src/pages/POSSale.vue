@@ -1188,6 +1188,15 @@ const { isRTL } = useLocale();
 
 // Component refs
 const itemsSelectorRef = ref(null);
+
+watch(
+	() => [uiStore.showPaymentDialog, uiStore.showCustomerDialog],
+	([paymentOpen, customerOpen], [wasPaymentOpen, wasCustomerOpen]) => {
+		if (!paymentOpen && !customerOpen && (wasPaymentOpen || wasCustomerOpen)) {
+			itemsSelectorRef.value?.focusSearchInput();
+		}
+	}
+);
 const offersDialogRef = ref(null);
 const containerRef = ref(null);
 const dividerRef = ref(null);

@@ -93,50 +93,15 @@
 						type="text"
 						:placeholder="searchPlaceholder"
 						:class="[
-							'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 pe-16 sm:pe-24 focus:outline-none transition-all',
+							'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 pe-10 sm:pe-16 focus:outline-none transition-all',
 							autoAddEnabled
 								? 'border-blue-400 bg-blue-50 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
-								: scannerEnabled
-								? 'border-green-400 bg-green-50 focus:ring-2 focus:ring-green-500 focus:border-transparent'
 								: 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
 						]"
 						:aria-label="__('Search items')"
 					/>
-					<!-- Barcode Scan Icon and Auto-Add Toggle -->
+					<!-- Auto-Add Toggle; barcode detection is automatic in the unified field -->
 					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
-						<button
-							@click="toggleBarcodeScanner"
-							:class="[
-								'p-1 sm:p-1.5 rounded transition-[background-color] duration-75 touch-manipulation',
-								scannerEnabled
-									? 'bg-green-100 hover:bg-green-200 active:bg-green-300 text-green-700'
-									: 'hover:bg-gray-100 active:bg-gray-200 text-gray-600',
-							]"
-							:title="
-								scannerEnabled
-									? __('Barcode Scanner: ON (Click to disable)')
-									: __('Barcode Scanner: OFF (Click to enable)')
-							"
-							:aria-label="
-								scannerEnabled
-									? __('Disable barcode scanner')
-									: __('Enable barcode scanner')
-							"
-						>
-							<svg
-								class="w-3.5 h-3.5 sm:w-4 sm:h-4"
-								fill="none"
-								stroke="currentColor"
-								viewBox="0 0 24 24"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"
-								/>
-							</svg>
-						</button>
 						<button
 							@click="toggleAutoAdd"
 							:class="[
@@ -421,14 +386,24 @@
 					class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2.5"
 				>
 					<div
-						v-for="item in displayedItems"
+						v-for="(item, index) in displayedItems"
 						:key="item.item_code"
+						:ref="(element) => setItemResultRef(element, index)"
+						tabindex="0"
+						role="button"
+						:aria-label="__('Add {0}', [item.item_name])"
+						:aria-current="index === highlightedItemIndex ? 'true' : undefined"
+						@focus="highlightedItemIndex = index"
+						@keydown.enter.stop.prevent="selectItemFromKeyboard(item)"
+						@keydown.down.stop.prevent="navigateItemResults(1, true)"
+						@keydown.up.stop.prevent="navigateItemResults(-1, true)"
 						@touchstart.passive="getOptimizedClickHandler(item).touchstart"
 						@touchmove.passive="getOptimizedClickHandler(item).touchmove"
 						@touchend.passive="getOptimizedClickHandler(item).touchend"
 						@click="getOptimizedClickHandler(item).click"
 						:class="[
 							'group relative bg-white border border-gray-200 rounded-lg p-1.5 sm:p-2.5 touch-manipulation transition-[border-color,box-shadow] duration-100 cursor-pointer hover:border-blue-400 hover:shadow-md',
+							index === highlightedItemIndex ? 'ring-2 ring-blue-500 border-blue-500' : '',
 						]"
 					>
 						<!-- Stock Badge - Tap to select, long press to view warehouse availability -->
@@ -744,13 +719,24 @@
 					</thead>
 					<tbody class="bg-white divide-y divide-gray-200">
 						<tr
-							v-for="item in displayedItems"
+							v-for="(item, index) in displayedItems"
 							:key="item.item_code"
+							:ref="(element) => setItemResultRef(element, index)"
+							tabindex="0"
+							:aria-label="__('Add {0}', [item.item_name])"
+							:aria-current="index === highlightedItemIndex ? 'true' : undefined"
+							@focus="highlightedItemIndex = index"
+							@keydown.enter.stop.prevent="selectItemFromKeyboard(item)"
+							@keydown.down.stop.prevent="navigateItemResults(1, true)"
+							@keydown.up.stop.prevent="navigateItemResults(-1, true)"
 							@touchstart.passive="getOptimizedClickHandler(item).touchstart"
 							@touchmove.passive="getOptimizedClickHandler(item).touchmove"
 							@touchend.passive="getOptimizedClickHandler(item).touchend"
 							@click="getOptimizedClickHandler(item).click"
-							class="group cursor-pointer hover:bg-blue-50 hover:shadow-md transition-[background-color,box-shadow] duration-100 touch-manipulation active:bg-blue-100"
+							:class="[
+								'group cursor-pointer hover:bg-blue-50 hover:shadow-md transition-[background-color,box-shadow] duration-100 touch-manipulation active:bg-blue-100',
+								index === highlightedItemIndex ? 'bg-blue-100 ring-2 ring-inset ring-blue-500' : '',
+							]"
 						>
 							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[50px] sm:w-[60px]">
 								<div
@@ -1043,8 +1029,42 @@ const emit = defineEmits(["item-selected"]);
 // Use composables
 const { getStockStatus } = useStock();
 const settingsStore = usePOSSettingsStore();
-const { showError, showWarning } = useToast();
+const { showError } = useToast();
 const { isAnyDialogOpen } = useDialogState();
+
+const highlightedItemIndex = ref(-1);
+const itemResultRefs = ref([]);
+
+function setItemResultRef(element, index) {
+	if (element) itemResultRefs.value[index] = element;
+}
+
+function navigateItemResults(delta, moveFocus = false) {
+	if (!displayedItems.value.length) return false;
+	const current = highlightedItemIndex.value;
+	highlightedItemIndex.value =
+		current < 0
+			? delta > 0
+				? 0
+				: displayedItems.value.length - 1
+			: (current + delta + displayedItems.value.length) % displayedItems.value.length;
+	nextTick(() => {
+		const element = itemResultRefs.value[highlightedItemIndex.value];
+		element?.scrollIntoView?.({ block: "nearest" });
+		if (moveFocus) element?.focus();
+	});
+	return true;
+}
+
+function selectHighlightedItem() {
+	if (!searchTerm.value?.trim() || loading.value || !displayedItems.value.length) return false;
+	const index = highlightedItemIndex.value >= 0 ? highlightedItemIndex.value : 0;
+	return selectItem(displayedItems.value[index]);
+}
+
+function selectItemFromKeyboard(item) {
+	if (selectItem(item)) clearSearchAndResetInput();
+}
 
 // Use Pinia store
 const itemStore = useItemSearchStore();
@@ -1068,12 +1088,10 @@ const {
 // Search input composable — owns search/scanner state, timers, concurrency
 const {
 	searchInputRef,
-	scannerEnabled,
 	autoAddEnabled,
 	handleSearchInput,
 	handleKeyDown,
 	handleSearchClick,
-	toggleBarcodeScanner,
 	toggleAutoAdd,
 	focusSearchInput,
 	clearSearchAndResetInput,
@@ -1081,8 +1099,9 @@ const {
 } = useSearchInput({
 	itemStore,
 	onItemFound: selectItem,
-	showWarning,
 	isAnyDialogOpen,
+	onNavigateResults: navigateItemResults,
+	onSelectHighlighted: selectHighlightedItem,
 });
 
 // Local state
@@ -1116,6 +1135,11 @@ const displayedItems = computed(() => {
 	return filteredItems.value;
 });
 
+watch([searchTerm, displayedItems], ([term, items]) => {
+	itemResultRefs.value = [];
+	highlightedItemIndex.value = term?.trim() && items.length ? 0 : -1;
+});
+
 // Total item count for pagination display
 const paginationTotal = computed(() => {
 	if (searchTerm.value?.trim()) return filteredItems.value?.length || 0;
@@ -1137,8 +1161,7 @@ const totalPages = computed(() => {
 });
 
 const SEARCH_PLACEHOLDERS = Object.freeze({
-	auto: __("Auto-Add ON - Type or scan barcode"),
-	scanner: __("Scanner ON - Enable Auto for automatic addition"),
+	auto: __("Auto-Add ON - Type an item or scan a barcode"),
 	default: __("Search by item code, name, item group or scan barcode"),
 });
 
@@ -1188,10 +1211,6 @@ const SORT_ICONS = Object.freeze({
 const searchMode = computed(() => {
 	if (autoAddEnabled.value) {
 		return "auto";
-	}
-
-	if (scannerEnabled.value) {
-		return "scanner";
 	}
 
 	return "default";
@@ -1324,6 +1343,9 @@ onMounted(() => {
 
 	// Add click outside listener for sort dropdown
 	document.addEventListener("click", handleClickOutside);
+
+	// Unified search is always ready for a physical scanner; no mode toggle needed.
+	focusSearchInput();
 });
 
 onUnmounted(() => {
