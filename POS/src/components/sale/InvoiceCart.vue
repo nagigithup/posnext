@@ -1284,11 +1284,7 @@
 									<div
 										class="text-xs sm:text-sm font-bold text-blue-600 leading-none"
 									>
-										{{
-											formatCurrency(
-												item.amount || item.rate * item.quantity
-											)
-										}}
+										{{ formatCurrency(getItemTotalIncludingTax(item)) }}
 									</div>
 								</div>
 							</div>
@@ -1950,6 +1946,17 @@ function getInitials(name) {
  */
 function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
+}
+
+/**
+ * Return the item row total including VAT.
+ * `item.amount` is the net amount calculated for ERPNext, while
+ * `item.tax_amount` contains the VAT extracted from or added to that amount.
+ */
+function getItemTotalIncludingTax(item) {
+	const fallbackAmount = Number(item.rate || 0) * Number(item.quantity || 0);
+	const netAmount = item.amount ?? fallbackAmount;
+	return Number(netAmount || 0) + Number(item.tax_amount || 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

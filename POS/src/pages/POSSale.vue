@@ -683,6 +683,73 @@
 				@refresh-history="loadInvoiceHistoryData"
 			/>
 
+			<!-- Hala Booking - reuse the existing Desk page inside a POS overlay -->
+			<Transition name="fade">
+				<div
+					v-if="showBookingInvoice"
+					class="fixed inset-0 z-[300] flex items-center justify-center bg-black bg-opacity-50 p-4"
+					role="dialog"
+					aria-modal="true"
+					:aria-label="__('Booking Invoice')"
+					@click.self="showBookingInvoice = false"
+				>
+					<div
+						class="flex h-full max-h-[95vh] w-full max-w-[95vw] flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+					>
+						<div
+							class="flex items-center justify-between border-b bg-gradient-to-r from-indigo-50 to-purple-50 px-6 py-4"
+						>
+							<div class="flex items-center gap-3">
+								<div class="rounded-lg bg-indigo-100 p-2">
+									<svg
+										class="h-6 w-6 text-indigo-600"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+										/>
+									</svg>
+								</div>
+								<h2 class="text-xl font-bold text-gray-900">
+									{{ __("Booking Invoice") }}
+								</h2>
+							</div>
+							<button
+								type="button"
+								class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-white/70 hover:text-gray-900"
+								:aria-label="__('Close')"
+								@click="showBookingInvoice = false"
+							>
+								<svg
+									class="h-5 w-5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M6 18L18 6M6 6l12 12"
+									/>
+								</svg>
+							</button>
+						</div>
+						<iframe
+							ref="bookingInvoiceFrame"
+							src="/desk/hala-booking?embedded=1"
+							class="min-h-0 w-full flex-1 border-0 bg-white"
+							:title="__('Booking Invoice')"
+						/>
+					</div>
+				</div>
+			</Transition>
+
 			<!-- Invoice Detail Dialog -->
 			<InvoiceDetailDialog
 				v-model="showInvoiceDetail"
@@ -1163,6 +1230,14 @@ const showStockLookup = ref(false);
 
 // Invoice Management dialog
 const showInvoiceManagement = ref(false);
+
+// Hala Booking dialog
+const showBookingInvoice = ref(false);
+const bookingInvoiceFrame = ref(null);
+const handledBookingPrintRequests = new Set();
+
+onMounted(() => window.addEventListener("message", handleBookingPrintRequest));
+onUnmounted(() => window.removeEventListener("message", handleBookingPrintRequest));
 
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
@@ -2930,6 +3005,8 @@ function handleManagementMenuClick(menuItem) {
 		// Load drafts data
 		draftsStore.loadDrafts();
 		showInvoiceManagement.value = true;
+	} else if (menuItem === "booking") {
+		showBookingInvoice.value = true;
 	} else if (menuItem === "products") {
 		// Open Stock Lookup dialog in search mode
 		showStockLookup.value = true;
@@ -3037,6 +3114,32 @@ async function handlePrintInvoice(invoiceData) {
 			message: "Failed to print invoice",
 			indicator: "red",
 		});
+	}
+}
+
+async function handleBookingPrintRequest(event) {
+	if (
+		event.origin !== window.location.origin ||
+		event.source !== bookingInvoiceFrame.value?.contentWindow ||
+		event.data?.type !== "hala-booking-print-sales-invoice"
+	) {
+		return;
+	}
+
+	const { requestId, invoiceName, printFormat } = event.data;
+	if (!requestId || !invoiceName || handledBookingPrintRequests.has(requestId)) return;
+	handledBookingPrintRequests.add(requestId);
+
+	try {
+		if (posSettingsStore.silentPrint && qzConnected.value) {
+			await printWithSilentFallback({ name: invoiceName }, printFormat || "Standard");
+			return;
+		}
+
+		await printInvoiceByName(invoiceName, printFormat || "Standard");
+	} catch (error) {
+		// Printing is best-effort and must never make a completed invoice look failed.
+		log.warn("Booking invoice printing was unavailable:", error?.message || error);
 	}
 }
 
