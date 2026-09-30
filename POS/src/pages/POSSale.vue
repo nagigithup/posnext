@@ -1111,9 +1111,12 @@ import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import {
+	canSafelyFallbackFromQZ,
 	hydrateLocalOnlyInvoice,
+	prepareInvoiceForPrinting,
 	printInvoice,
 	printInvoiceByName,
+	printManualWithSilentSetting,
 	printWithSilentFallback,
 } from "@/utils/printInvoice";
 import { qzConnected, connect as qzConnect, disconnect as qzDisconnect } from "@/utils/qzTray";
@@ -2269,7 +2272,10 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
-					await handlePrintInvoice({ name: offlineReceiptName });
+					await handlePrintInvoice(
+						{ name: offlineReceiptName },
+						{ automatic: true }
+					);
 					showSuccess(
 						__(
 							"Invoice {0} saved offline and sent to printer — will sync when online",
@@ -2281,8 +2287,8 @@ async function handlePaymentCompleted(paymentData) {
 					uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
 					showWarning(
 						__(
-							"Invoice {0} saved offline but print failed — open Print from the success dialog",
-							[offlineReceiptName]
+							"Invoice {0} saved offline but print failed: {1}",
+							[offlineReceiptName, error?.message || __("Unknown printing error")]
 						)
 					);
 				}
@@ -2352,11 +2358,19 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						await handlePrintInvoice({ name: invoiceName });
+						await handlePrintInvoice(
+							{ name: invoiceName },
+							{ automatic: true }
+						);
 						showSuccess(__("Invoice {0} created and sent to printer", [invoiceName]));
 					} catch (error) {
 						log.error("Auto-print error:", error);
-						showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+						showWarning(
+							__("Invoice {0} created but print failed: {1}", [
+								invoiceName,
+								error?.message || __("Unknown printing error"),
+							])
+						);
 					}
 				} else {
 					uiStore.showSuccess(invoiceName, invoiceTotal, paidAmount);
@@ -3078,7 +3092,10 @@ function handleViewInvoice(invoice) {
 }
 
 // Centralized print handler - uses printInvoice.js utilities
-async function handlePrintInvoice(invoiceData) {
+async function handlePrintInvoice(
+	invoiceData,
+	{ automatic = false, printFormat = null, letterhead = null } = {}
+) {
 	try {
 		invoiceData = await hydrateLocalOnlyInvoice(invoiceData || {});
 		const offlineSnapshot = uiStore.lastOfflinePrintDoc;
@@ -3090,13 +3107,36 @@ async function handlePrintInvoice(invoiceData) {
 			invoiceData = offlineSnapshot;
 		}
 
-		// Silent print path — send directly to thermal printer via QZ Tray
-		if (posSettingsStore.silentPrint) {
-			const result = await printWithSilentFallback(invoiceData);
-			if (result.method === "browser") {
-				log.info("Used browser print fallback");
+		if (automatic) {
+			const prepared = await prepareInvoiceForPrinting(
+				invoiceData,
+				printFormat,
+				letterhead
+			);
+			if (posSettingsStore.silentPrint && qzConnected.value) {
+				try {
+					return await printWithSilentFallback(
+						prepared.invoiceData,
+						prepared.printFormat,
+						prepared.letterhead
+					);
+				} catch (error) {
+					if (!canSafelyFallbackFromQZ(error)) throw error;
+					log.warn("QZ was unavailable before dispatch; using browser print:", error.message);
+				}
 			}
-			return;
+
+			await printInvoice(
+				prepared.invoiceData,
+				prepared.printFormat,
+				prepared.letterhead
+			);
+			return { method: "browser", success: true, printFormat: prepared.printFormat };
+		}
+
+		// Preserve the pre-existing manual button behavior.
+		if (posSettingsStore.silentPrint) {
+			return await printManualWithSilentSetting(invoiceData);
 		}
 
 		// Standard browser print path
@@ -3109,9 +3149,10 @@ async function handlePrintInvoice(invoiceData) {
 		}
 	} catch (error) {
 		log.error("Error printing invoice:", error);
+		if (automatic) throw error;
 		window.frappe?.msgprint({
 			title: "Error",
-			message: "Failed to print invoice",
+			message: error?.message || "Failed to print invoice",
 			indicator: "red",
 		});
 	}
@@ -3131,15 +3172,14 @@ async function handleBookingPrintRequest(event) {
 	handledBookingPrintRequests.add(requestId);
 
 	try {
-		if (posSettingsStore.silentPrint && qzConnected.value) {
-			await printWithSilentFallback({ name: invoiceName }, printFormat || "Standard");
-			return;
-		}
-
-		await printInvoiceByName(invoiceName, printFormat || "Standard");
+		await handlePrintInvoice(
+			{ name: invoiceName },
+			{ automatic: true, printFormat: printFormat || "Standard" }
+		);
 	} catch (error) {
 		// Printing is best-effort and must never make a completed invoice look failed.
 		log.warn("Booking invoice printing was unavailable:", error?.message || error);
+		showWarning(error?.message || __("Booking invoice printing was unavailable."));
 	}
 }
 
