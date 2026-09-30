@@ -6,6 +6,12 @@ import { parseError } from "@/utils/errorHandler";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
+import { call } from "@/utils/apiWrapper";
+import {
+	applyCustomerPricing,
+	buildCustomerPricedItem,
+	isCurrentPricingGeneration,
+} from "@/utils/customerPricing";
 import { defineStore } from "pinia";
 import { computed, nextTick, ref, toRaw, watch } from "vue";
 
@@ -86,6 +92,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		grandTotal,
 		posProfile,
 		posOpeningShift,
+		sellingPriceList,
 		payments,
 		salesTeam,
 		additionalDiscount,
@@ -120,6 +127,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const selectionMode = ref("uom"); // 'uom' or 'variant'
 	const currentDraftId = ref(null);
 	const targetDoctype = ref("Sales Invoice");
+	const effectivePriceList = sellingPriceList;
+	let customerPricingGeneration = 0;
 
 	// Offer processing state management
 	const offerProcessingState = ref({
@@ -175,7 +184,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const hasCustomer = computed(() => !!customer.value);
 
 	// Actions
-	function addItem(item, qty = 1, _autoAdd = false, currentProfile = null) {
+	async function addItem(item, qty = 1, _autoAdd = false, currentProfile = null) {
 		if (
 			currentProfile &&
 			settingsStore.shouldEnforceStockValidation() &&
@@ -195,7 +204,83 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
-		addItemToInvoice(item, qty);
+		let itemToAdd = item;
+		if (!offlineState.isOffline && posProfile.value) {
+			itemToAdd = await getItemPricingForCurrentCustomer(item, qty);
+		}
+
+		addItemToInvoice(itemToAdd, qty);
+	}
+
+	async function resolveEffectivePriceList(generation = customerPricingGeneration) {
+		if (offlineState.isOffline) {
+			const shiftStore = usePOSShiftStore();
+			effectivePriceList.value = shiftStore.currentProfile?.selling_price_list || null;
+			return effectivePriceList.value;
+		}
+
+		const result = await call("hala.api.pos_pricing.get_effective_price_list", {
+			customer: customer.value?.name || customer.value || null,
+			pos_profile: posProfile.value,
+		});
+		if (isCurrentPricingGeneration(generation, customerPricingGeneration)) {
+			effectivePriceList.value = result?.price_list || null;
+		}
+		return result?.price_list || null;
+	}
+
+	async function getItemPricingForCurrentCustomer(item, qty) {
+		// A customer can change while a request is in flight. Retry against the
+		// latest generation so a stale A -> B response can never price B's cart.
+		for (;;) {
+			const generation = customerPricingGeneration;
+			const selectedCustomer = customer.value?.name || customer.value || null;
+			const details = await call("pos_next.api.items.get_item_details", {
+				item_code: item.item_code,
+				pos_profile: posProfile.value,
+				customer: selectedCustomer,
+				qty,
+				uom: item.uom || item.stock_uom,
+			});
+			if (!isCurrentPricingGeneration(generation, customerPricingGeneration)) continue;
+
+			effectivePriceList.value =
+				details?.effective_price_list || details?.selling_price_list || effectivePriceList.value;
+			return buildCustomerPricedItem(item, details);
+		}
+	}
+
+	async function repriceCartForCustomer(generation) {
+		await resolveEffectivePriceList(generation);
+		if (
+			!isCurrentPricingGeneration(generation, customerPricingGeneration) ||
+			offlineState.isOffline
+		)
+			return;
+
+		const pricedItems = await Promise.all(
+			invoiceItems.value.map(async (item) => {
+				if (item.is_free_item) return { item, details: null };
+				const details = await call("pos_next.api.items.get_item_details", {
+					item_code: item.item_code,
+					pos_profile: posProfile.value,
+					customer: customer.value?.name || customer.value || null,
+					qty: item.quantity,
+					uom: item.uom || item.stock_uom,
+				});
+				return { item, details };
+			})
+		);
+
+		if (!isCurrentPricingGeneration(generation, customerPricingGeneration)) return;
+		for (const { item, details } of pricedItems) {
+			if (!details) continue;
+			applyCustomerPricing(item, details);
+			recalculateItem(item);
+		}
+		rebuildIncrementalCache();
+		offerProcessingState.value.lastCartHash = "";
+		triggerOfferProcessing(true);
 	}
 
 	/**
@@ -235,6 +320,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		clearInvoiceCart();
 		customer.value = null;
+		effectivePriceList.value = null;
+		customerPricingGeneration++;
 		offersStore.clearOneTimeContext();
 		appliedOffers.value = [];
 		appliedCoupon.value = null;
@@ -315,12 +402,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	async function setCustomer(selectedCustomer) {
 		customer.value = selectedCustomer;
+		const generation = ++customerPricingGeneration;
+		await repriceCartForCustomer(generation);
+		if (!isCurrentPricingGeneration(generation, customerPricingGeneration)) return;
 		await syncOneTimeContextForCurrentCustomer();
 	}
 
 	async function loadDefaultCustomer() {
 		await setDefaultCustomer();
-		await syncOneTimeContextForCurrentCustomer();
+		await setCustomer(customer.value);
 	}
 
 	function setPendingItem(item, qty = 1, mode = "uom") {
@@ -358,7 +448,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			pos_profile: posProfile.value,
 			customer: customer.value?.name || customer.value || currentProfile?.customer,
 			company: currentProfile?.company,
-			selling_price_list: currentProfile?.selling_price_list,
+			selling_price_list:
+				effectivePriceList.value || currentProfile?.selling_price_list,
 			currency: currentProfile?.currency,
 			discount_amount: additionalDiscount.value || 0,
 			coupon_code: appliedCoupon.value?.name || "",
@@ -1870,6 +1961,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		appliedCoupon,
 		selectionMode,
 		currentDraftId,
+		effectivePriceList,
 		offerProcessingState, // Offer processing state for UI feedback
 
 		// Computed

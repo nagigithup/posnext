@@ -304,6 +304,11 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 			"doctype": "Sales Invoice",
 			"item_code": item.get("item_code"),
 			"company": item.get("company"),
+			"customer": item.get("customer") or (doc.get("customer") if doc else None),
+			"is_pos": item.get("is_pos") or (doc.get("is_pos") if doc else 0),
+			"pos_profile": item.get("pos_profile") or (doc.get("pos_profile") if doc else None),
+			"transaction_date": item.get("transaction_date")
+			or (doc.get("transaction_date") if doc else None),
 			"qty": item.get("qty", 1),
 			"uom": item.get("uom"),  # Include UOM to fetch correct price list rate
 			"selling_price_list": item.get("selling_price_list"),

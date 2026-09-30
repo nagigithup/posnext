@@ -26,6 +26,7 @@ export function useInvoice() {
 	const salesTeam = ref([]); // Sales team for Sales Invoice
 	const posProfile = ref(null);
 	const posOpeningShift = ref(null); // POS Opening Shift name
+	const sellingPriceList = ref(null); // Effective list for the current customer/cart
 	const additionalDiscount = ref(0);
 	const couponCode = ref(null);
 	const taxRules = ref([]); // Tax rules from POS Profile
@@ -936,6 +937,7 @@ export function useInvoice() {
 			pos_profile: posProfile.value,
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
+			selling_price_list: sellingPriceList.value,
 			items: formatItemsForSubmission(rawItems),
 			payments: invoicePayments,
 			discount_amount: additionalDiscount.value || 0,
@@ -1001,6 +1003,7 @@ export function useInvoice() {
 					pos_profile: posProfile.value,
 					posa_pos_opening_shift: posOpeningShift.value,
 					customer: customer.value?.name || customer.value,
+					selling_price_list: sellingPriceList.value,
 					items: formatItemsForSubmission(rawItems),
 					payments: invoicePayments,
 					discount_amount: additionalDiscount.value || 0,
@@ -1282,6 +1285,7 @@ export function useInvoice() {
 		salesTeam,
 		posProfile,
 		posOpeningShift,
+		sellingPriceList,
 		additionalDiscount,
 		couponCode,
 		taxRules,

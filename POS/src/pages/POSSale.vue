@@ -1885,7 +1885,7 @@ async function handlePreliminaryClosingSubmitted() {
 	}, 500);
 }
 
-function handleItemSelected(item, autoAdd = false) {
+async function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
 		try {
@@ -1902,14 +1902,14 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(
+				await cartStore.addItem(
 					resolvedItem,
 					item.resolved_qty,
 					true,
 					shiftStore.currentProfile
 				);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				await cartStore.addItem(item, 1, true, shiftStore.currentProfile);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -1965,7 +1965,7 @@ function handleItemSelected(item, autoAdd = false) {
 
 	// Add to cart
 	try {
-		cartStore.addItem(item, 1, false, shiftStore.currentProfile);
+		await cartStore.addItem(item, 1, false, shiftStore.currentProfile);
 	} catch (error) {
 		uiStore.showError(
 			__("Insufficient Stock"),
@@ -1987,9 +1987,9 @@ function handleAdditionalDiscountUpdate(discountAmount) {
 	cartStore.rebuildIncrementalCache();
 }
 
-function handleCustomerSelected(selectedCustomer) {
+async function handleCustomerSelected(selectedCustomer) {
 	if (selectedCustomer) {
-		cartStore.setCustomer(selectedCustomer);
+		await cartStore.setCustomer(selectedCustomer);
 		uiStore.showCustomerDialog = false;
 		showSuccess(__("{0} selected", [selectedCustomer.customer_name]));
 
@@ -1998,7 +1998,7 @@ function handleCustomerSelected(selectedCustomer) {
 			uiStore.showPaymentDialog = true;
 		}
 	} else {
-		cartStore.setCustomer(null);
+		await cartStore.setCustomer(null);
 	}
 }
 
@@ -2364,7 +2364,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(
+					await cartStore.addItem(
 						variant,
 						cartStore.pendingItemQty,
 						false,
@@ -2400,7 +2400,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -2517,7 +2517,7 @@ async function handleLoadDraft(draft) {
 
 		const draftData = await draftsStore.loadDraft(draft);
 		cartStore.invoiceItems = draftData.items;
-		cartStore.setCustomer(draftData.customer);
+		await cartStore.setCustomer(draftData.customer);
 		cartStore.currentDraftId = draft.draft_id; // Set current draft ID
 
 		// Rebuild incremental cache to recalculate totals
@@ -2564,7 +2564,7 @@ async function handleApplyOffer(offer) {
 	}
 }
 
-function handleBatchSerialSelected(batchSerial) {
+async function handleBatchSerialSelected(batchSerial) {
 	if (cartStore.pendingItem) {
 		// Use quantity from batchSerial if provided (for multiple serial numbers), otherwise use pendingItemQty
 		const qty = batchSerial.quantity || cartStore.pendingItemQty;
@@ -2574,7 +2574,7 @@ function handleBatchSerialSelected(batchSerial) {
 			...batchSerial,
 		};
 		try {
-			cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+			await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 			cartStore.clearPendingItem();
 		} catch (error) {
 			showError(error.message);
@@ -2583,7 +2583,7 @@ function handleBatchSerialSelected(batchSerial) {
 }
 
 async function handleCustomerCreated(newCustomer) {
-	cartStore.setCustomer(newCustomer);
+	await cartStore.setCustomer(newCustomer);
 	uiStore.showCreateCustomerDialog = false;
 	editCustomer.value = null; // Clear edit mode
 
@@ -2594,7 +2594,7 @@ async function handleCustomerCreated(newCustomer) {
 }
 
 async function handleCustomerUpdated(updatedCustomer) {
-	cartStore.setCustomer(updatedCustomer);
+	await cartStore.setCustomer(updatedCustomer);
 	uiStore.showCreateCustomerDialog = false;
 	editCustomer.value = null; // Clear edit mode
 
@@ -2716,14 +2716,14 @@ async function handleEditOfflineInvoice(invoice) {
 		const invoiceData = invoice.data;
 
 		if (invoiceData.customer) {
-			cartStore.setCustomer(invoiceData.customer);
+			await cartStore.setCustomer(invoiceData.customer);
 		}
 
 		if (invoiceData.items && invoiceData.items.length > 0) {
 			for (const item of invoiceData.items) {
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
-				cartStore.addItem(
+				await cartStore.addItem(
 					item,
 					item.quantity || item.qty || 1,
 					true,
