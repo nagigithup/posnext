@@ -14,6 +14,7 @@ const CSS_PIXELS_PER_INCH = 96;
 const MM_PER_INCH = 25.4;
 const MIN_RECEIPT_HEIGHT_MM = 40;
 const MAX_RECEIPT_HEIGHT_MM = 5000;
+const SMART_PRINT_ASSET = "/assets/hala/js/smart_print.js";
 const THERMAL_MEASUREMENT_STYLE = `
 	html, body {
 		width: 80mm !important;
@@ -39,10 +40,35 @@ const OFFLINE_ARABIC_RENDER_STYLE = `
 const completedAutomaticPrints = new Set();
 const uncertainAutomaticPrints = new Set();
 const automaticPrintJobs = new Map();
+let smartPrinterPromise;
 
 // ============================================================================
 // Shared helpers
 // ============================================================================
+
+function getSmartPrinter() {
+	if (window.halaSmartPrint) return Promise.resolve(window.halaSmartPrint);
+	if (smartPrinterPromise) return smartPrinterPromise;
+
+	smartPrinterPromise = new Promise((resolve, reject) => {
+		const script = document.createElement("script");
+		script.src = SMART_PRINT_ASSET;
+		script.async = true;
+		script.addEventListener(
+			"load",
+			() => {
+				if (window.halaSmartPrint) resolve(window.halaSmartPrint);
+				else reject(new Error("Native print helper did not initialize"));
+			},
+			{ once: true },
+		);
+		script.addEventListener("error", () => reject(new Error("Native print helper failed to load")), {
+			once: true,
+		});
+		document.head.appendChild(script);
+	});
+	return smartPrinterPromise;
+}
 
 function formatCurrency(amount) {
 	return Number.parseFloat(amount || 0).toFixed(2);
@@ -415,13 +441,13 @@ export async function prepareInvoiceForPrinting(invoiceData, printFormat = null,
 }
 
 // ============================================================================
-// Browser printing (opens /printview in a new window)
+// Browser-native printing
 // ============================================================================
 
 /**
- * Open Frappe's /printview in a new browser window.
- * The page includes trigger_print=1 so the OS print dialog appears automatically.
- * Falls back to the hardcoded receipt template if the popup is blocked.
+ * Print Frappe's /printview through the shared hidden-iframe helper.
+ * Chrome decides whether window.print() opens a dialog or prints silently when
+ * launched with --kiosk-printing. Offline receipts keep their existing fallback.
  */
 export async function printInvoice(invoiceData, printFormat = null, letterhead = null) {
 	let printableInvoice = invoiceData;
@@ -440,23 +466,11 @@ export async function printInvoice(invoiceData, printFormat = null, letterhead =
 
 		const doctype = printableInvoice.doctype || "Sales Invoice";
 		const format = printFormat || DEFAULT_PRINT_FORMAT;
-
-		const params = new URLSearchParams({
-			doctype,
-			name: printableInvoice.name,
-			format,
-			no_letterhead: letterhead ? 0 : 1,
-			_lang: "en",
-			trigger_print: 1,
-			_t: Date.now(),
+		const smartPrint = await getSmartPrinter();
+		return smartPrint(doctype, printableInvoice.name, format, {
+			letterhead,
+			language: "en",
 		});
-		if (letterhead) params.append("letterhead", letterhead);
-
-		const printWindow = window.open(`/printview?${params}`, "_blank", "width=800,height=600");
-		if (!printWindow) {
-			throw new Error("Popup blocked — check your browser settings.");
-		}
-		return true;
 	} catch (error) {
 		log.error("Browser print failed:", error);
 		if (isLocalOnlyInvoiceName(printableInvoice?.name) && !(printableInvoice.items?.length > 0)) {
