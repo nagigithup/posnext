@@ -3030,6 +3030,8 @@ function handleManagementMenuClick(menuItem) {
 		showInvoiceManagement.value = true;
 	} else if (menuItem === "booking") {
 		showBookingInvoice.value = true;
+	} else if (menuItem === "deposit") {
+		window.location.assign("/desk/hala-deposit");
 	} else if (menuItem === "products") {
 		// Open Stock Lookup dialog in search mode
 		showStockLookup.value = true;
