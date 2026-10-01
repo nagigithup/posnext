@@ -4,6 +4,7 @@ import { logger } from "@/utils/logger";
 import { getOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
 import { getOfflineInvoiceByOfflineId } from "@/utils/offline/sync";
 import { offlineWorker } from "@/utils/offline/workerClient";
+import { nativeBrowserPrint } from "@/utils/nativeBrowserPrint";
 import { printHTML as qzPrintHTML, printImageBase64, printPDFBase64 } from "@/utils/qzTray";
 
 const log = logger.create("PrintInvoice");
@@ -14,7 +15,6 @@ const CSS_PIXELS_PER_INCH = 96;
 const MM_PER_INCH = 25.4;
 const MIN_RECEIPT_HEIGHT_MM = 40;
 const MAX_RECEIPT_HEIGHT_MM = 5000;
-const SMART_PRINT_ASSET = "/assets/hala/js/smart_print.js";
 const THERMAL_MEASUREMENT_STYLE = `
 	html, body {
 		width: 80mm !important;
@@ -40,35 +40,10 @@ const OFFLINE_ARABIC_RENDER_STYLE = `
 const completedAutomaticPrints = new Set();
 const uncertainAutomaticPrints = new Set();
 const automaticPrintJobs = new Map();
-let smartPrinterPromise;
 
 // ============================================================================
 // Shared helpers
 // ============================================================================
-
-function getSmartPrinter() {
-	if (window.halaSmartPrint) return Promise.resolve(window.halaSmartPrint);
-	if (smartPrinterPromise) return smartPrinterPromise;
-
-	smartPrinterPromise = new Promise((resolve, reject) => {
-		const script = document.createElement("script");
-		script.src = SMART_PRINT_ASSET;
-		script.async = true;
-		script.addEventListener(
-			"load",
-			() => {
-				if (window.halaSmartPrint) resolve(window.halaSmartPrint);
-				else reject(new Error("Native print helper did not initialize"));
-			},
-			{ once: true },
-		);
-		script.addEventListener("error", () => reject(new Error("Native print helper failed to load")), {
-			once: true,
-		});
-		document.head.appendChild(script);
-	});
-	return smartPrinterPromise;
-}
 
 function formatCurrency(amount) {
 	return Number.parseFloat(amount || 0).toFixed(2);
@@ -466,8 +441,7 @@ export async function printInvoice(invoiceData, printFormat = null, letterhead =
 
 		const doctype = printableInvoice.doctype || "Sales Invoice";
 		const format = printFormat || DEFAULT_PRINT_FORMAT;
-		const smartPrint = await getSmartPrinter();
-		return smartPrint(doctype, printableInvoice.name, format, {
+		return nativeBrowserPrint(doctype, printableInvoice.name, format, {
 			letterhead,
 			language: "en",
 		});
@@ -482,7 +456,7 @@ export async function printInvoice(invoiceData, printFormat = null, letterhead =
 
 /**
  * Fetch an invoice by name, resolve its POS Profile print settings,
- * then open the browser print window.
+ * then print it through the hidden native browser frame.
  */
 export async function printInvoiceByName(invoiceName, printFormat = null, letterhead = null) {
 	if (isLocalOnlyInvoiceName(invoiceName)) {
