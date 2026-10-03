@@ -129,6 +129,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const targetDoctype = ref("Sales Invoice");
 	const effectivePriceList = sellingPriceList;
 	let customerPricingGeneration = 0;
+	const itemPricingRequests = new WeakMap();
 
 	// Offer processing state management
 	const offerProcessingState = ref({
@@ -204,12 +205,29 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
+		const itemUom = item.uom || item.stock_uom;
+		const existingItem = invoiceItems.value.find(
+			(i) => i.item_code === item.item_code && i.uom === itemUom
+		);
+		const pricingQty = (existingItem?.quantity || 0) + qty;
 		let itemToAdd = item;
+		let hasServerPricing = false;
 		if (!offlineState.isOffline && posProfile.value) {
-			itemToAdd = await getItemPricingForCurrentCustomer(item, qty);
+			itemToAdd = await getItemPricingForCurrentCustomer(item, pricingQty);
+			hasServerPricing = true;
 		}
 
 		addItemToInvoice(itemToAdd, qty);
+		if (hasServerPricing) {
+			const cartItem = invoiceItems.value.find(
+				(i) => i.item_code === item.item_code && i.uom === itemUom
+			);
+			if (cartItem) {
+				applyCustomerPricing(cartItem, itemToAdd);
+				recalculateItem(cartItem);
+				rebuildIncrementalCache();
+			}
+		}
 	}
 
 	async function resolveEffectivePriceList(generation = customerPricingGeneration) {
@@ -261,20 +279,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		const pricedItems = await Promise.all(
 			invoiceItems.value.map(async (item) => {
 				if (item.is_free_item) return { item, details: null };
+				const request = (itemPricingRequests.get(item) || 0) + 1;
+				itemPricingRequests.set(item, request);
+				const quantity = item.quantity;
+				const uom = item.uom || item.stock_uom;
 				const details = await call("pos_next.api.items.get_item_details", {
 					item_code: item.item_code,
 					pos_profile: posProfile.value,
 					customer: customer.value?.name || customer.value || null,
-					qty: item.quantity,
-					uom: item.uom || item.stock_uom,
+					qty: quantity,
+					uom,
 				});
-				return { item, details };
+				return { item, details, request, quantity, uom };
 			})
 		);
 
 		if (!isCurrentPricingGeneration(generation, customerPricingGeneration)) return;
-		for (const { item, details } of pricedItems) {
+		for (const { item, details, request, quantity, uom } of pricedItems) {
 			if (!details) continue;
+			if (
+				itemPricingRequests.get(item) !== request ||
+				item.quantity !== quantity ||
+				(item.uom || item.stock_uom) !== uom
+			)
+				continue;
 			applyCustomerPricing(item, details);
 			recalculateItem(item);
 		}
@@ -288,7 +316,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * Wraps useInvoice.updateItemQuantity to enforce stock limits
 	 * when the user clicks +/- or types a new quantity.
 	 */
-	function updateItemQuantity(itemCode, quantity, uom = null) {
+	async function updateItemQuantity(itemCode, quantity, uom = null) {
 		const item = uom
 			? invoiceItems.value.find((i) => i.item_code === itemCode && i.uom === uom)
 			: invoiceItems.value.find((i) => i.item_code === itemCode);
@@ -311,6 +339,38 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		baseUpdateItemQuantity(itemCode, quantity, uom);
+
+		if (offlineState.isOffline || !posProfile.value) return;
+
+		const request = (itemPricingRequests.get(item) || 0) + 1;
+		itemPricingRequests.set(item, request);
+		const generation = customerPricingGeneration;
+		const expectedQuantity = item.quantity;
+		const expectedUom = item.uom || item.stock_uom;
+
+		try {
+			const details = await call("pos_next.api.items.get_item_details", {
+				item_code: item.item_code,
+				pos_profile: posProfile.value,
+				customer: customer.value?.name || customer.value || null,
+				qty: expectedQuantity,
+				uom: expectedUom,
+			});
+			if (
+				!invoiceItems.value.includes(item) ||
+				!isCurrentPricingGeneration(generation, customerPricingGeneration) ||
+				itemPricingRequests.get(item) !== request ||
+				item.quantity !== expectedQuantity ||
+				(item.uom || item.stock_uom) !== expectedUom
+			)
+				return;
+
+			applyCustomerPricing(item, details);
+			recalculateItem(item);
+			rebuildIncrementalCache();
+		} catch (error) {
+			console.error("Error refreshing item pricing after quantity change:", error);
+		}
 	}
 
 	function clearCart() {
@@ -928,16 +988,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					appliedOffers.value = [];
 					processFreeItems([]);
 
-					// Reset all item rates to original (remove discounts)
-					invoiceItems.value.forEach((item) => {
-						if (item.pricing_rules && item.pricing_rules.length > 0) {
-							item.discount_percentage = 0;
-							item.discount_amount = 0;
-							item.pricing_rules = [];
-							recalculateItem(item);
-						}
-					});
-					rebuildIncrementalCache();
+					// Ask ERPNext for the current base pricing again. An invalid POS
+					// offer must not erase an unrelated customer Pricing Rule.
+					await repriceCartForCustomer(customerPricingGeneration);
 				} else {
 					// Reapply only valid offers
 					const invoiceData = buildOfferEvaluationPayload(currentProfile);
@@ -1396,8 +1449,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		cartItem.uom = newUom;
 		cartItem.conversion_factor = conversionFactor;
-		cartItem.rate = pricing.rate;
-		cartItem.price_list_rate = pricing.price_list_rate;
+		applyCustomerPricing(cartItem, pricing);
 	}
 
 	/**
@@ -1692,13 +1744,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			if (combinedCodes.length === 0 && invalidOffers.length > 0) {
 				appliedOffers.value = [];
 				processFreeItems([]);
-				invoiceItems.value.forEach((item) => {
-					if (item.pricing_rules && item.pricing_rules.length > 0) {
-						item.discount_percentage = 0;
-						item.discount_amount = 0;
-						recalculateItem(item);
-					}
-				});
+				await repriceCartForCustomer(customerPricingGeneration);
 				// Also clear any transaction-level header discount the server
 				// previously surfaced — if no offers remain, no header discount applies.
 				applyHeaderDiscountFromServer(null);

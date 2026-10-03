@@ -111,7 +111,7 @@ export function useInvoice() {
 	 * @param {string} uom - Target UOM
 	 * @param {number} conversionFactor - UOM conversion factor
 	 * @param {number} qty - Quantity for pricing
-	 * @returns {Promise<{rate: number, price_list_rate: number}>}
+	 * @returns {Promise<Object>} Authoritative pricing details for the selected UOM
 	 */
 	async function resolveUomPricing(item, uom, conversionFactor, qty) {
 		// When online, fetch server pricing for customer-specific rates
@@ -125,8 +125,9 @@ export function useInvoice() {
 					uom,
 				});
 				return {
-					rate: itemDetails.price_list_rate || itemDetails.rate,
-					price_list_rate: itemDetails.price_list_rate,
+					...itemDetails,
+					rate: itemDetails.rate || itemDetails.price_list_rate || 0,
+					price_list_rate: itemDetails.price_list_rate || itemDetails.rate || 0,
 				};
 			} catch (err) {
 				log.warn("Server UOM pricing unavailable, resolving from IndexedDB", err);
@@ -159,11 +160,6 @@ export function useInvoice() {
 		makeParams({ pos_profile }) {
 			return { pos_profile };
 		},
-		auto: false,
-	});
-
-	const cleanupDraftsResource = createResource({
-		url: "pos_next.api.invoices.cleanup_old_drafts",
 		auto: false,
 	});
 
@@ -263,8 +259,15 @@ export function useInvoice() {
 				rate: item.rate || item.price_list_rate || 0,
 				price_list_rate: item.price_list_rate || item.rate || 0,
 				quantity: quantity,
-				discount_amount: 0,
-				discount_percentage: 0,
+				discount_amount: item.discount_amount || 0,
+				discount_percentage: item.discount_percentage || 0,
+				pricing_rules: item.pricing_rules || "",
+				base_price_list_rate: item.base_price_list_rate,
+				base_rate: item.base_rate,
+				base_rate_with_margin: item.base_rate_with_margin,
+				rate_with_margin: item.rate_with_margin,
+				net_rate: item.net_rate,
+				net_amount: item.net_amount,
 				tax_amount: 0,
 				amount: quantity * (item.rate || item.price_list_rate || 0),
 				stock_qty: item.stock_qty || 0,
@@ -635,7 +638,8 @@ export function useInvoice() {
 	 * 5. Final Amount   = Stored in item.amount for backend processing
 	 *
 	 * Important Design Decisions:
-	 * - item.rate always reflects the original list price (price_list_rate)
+	 * - price_list_rate remains the original list price
+	 * - item.rate preserves an authoritative ERPNext rate while a rule is active
 	 * - Discounts are stored separately (discount_amount, discount_percentage)
 	 * - This allows UI to display original prices with clear discount visibility
 	 * - Backend receives calculated net rate (amount/quantity) for accurate totals
@@ -684,9 +688,16 @@ export function useInvoice() {
 
 		// Update item fields with rounded values
 		item.tax_amount = taxAmount;
-		// For manually edited rates, preserve the edited rate; otherwise use price_list_rate
-		if (!isManuallyEdited) {
-			item.rate = effectiveRate; // Preserve original price for display
+		// A pricing response may carry a discounted ERPNext rate. Keep it while the
+		// rule/discount is active; price_list_rate remains the gross catalog price.
+		// When pricing is explicitly cleared, restore the ordinary list rate.
+		if (
+			!isManuallyEdited &&
+			!item.pricing_rules &&
+			!item.discount_percentage &&
+			!item.discount_amount
+		) {
+			item.rate = effectiveRate;
 		}
 		// If manually edited, item.rate is already set to the edited value
 		item.amount = netAmount; // Net amount for backend calculations
@@ -1222,19 +1233,6 @@ export function useInvoice() {
 		// Set default customer from POS Profile if available
 		setDefaultCustomer();
 
-		// Cleanup old draft invoices (older than 1 hour) in background
-		// Skip if offline to avoid network errors
-		if (!isOffline()) {
-			try {
-				await cleanupDraftsResource.submit({
-					pos_profile: posProfile.value,
-					max_age_hours: 1,
-				});
-			} catch (error) {
-				// Silent fail - don't block cart clearing
-				console.warn("Failed to cleanup old drafts:", error);
-			}
-		}
 	}
 
 	async function loadTaxRules(profileName, posSettings = null) {

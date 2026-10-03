@@ -147,8 +147,8 @@ class POSClosingShift(Document):
 		opening_entry.flags.ignore_permissions = True
 		opening_entry.pos_closing_shift = self.name
 		opening_entry.set_status()
-		self.delete_draft_invoices()
 		opening_entry.save(ignore_permissions=True)
+		self.delete_draft_invoices()
 		# link invoices with this closing shift so ERPNext can block edits
 		self._set_closing_entry_invoices()
 
@@ -234,23 +234,9 @@ class POSClosingShift(Document):
 		return bool(frappe.db.exists("POS Invoice Merge Log", {"consolidated_credit_note": sales_invoice}))
 
 	def delete_draft_invoices(self):
-		if frappe.get_value("POS Profile", self.pos_profile, "posa_allow_delete"):
-			doctype = "Sales Invoice"
-			data = frappe.db.sql(
-				f"""
-		select
-		    name
-		from
-		    `tab{doctype}`
-		where
-		    docstatus = 0 and posa_is_printed = 0 and posa_pos_opening_shift = %s
-		""",
-				(self.pos_opening_shift),
-				as_dict=1,
-			)
+		from pos_next.api.invoices import cleanup_session_drafts
 
-			for invoice in data:
-				frappe.delete_doc(doctype, invoice.name, force=1)
+		return cleanup_session_drafts(self.pos_opening_shift)
 
 	@frappe.whitelist()
 	def get_payment_reconciliation_details(self):

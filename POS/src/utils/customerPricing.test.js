@@ -32,6 +32,63 @@ describe("customer POS pricing", () => {
 		});
 	});
 
+	it("copies all ERPNext pricing fields from an authoritative response", () => {
+		const item = { item_code: "ITEM-X", discount_percentage: 23 };
+		applyCustomerPricing(item, {
+			rate: 77,
+			price_list_rate: 100,
+			base_price_list_rate: 100,
+			base_rate: 77,
+			net_rate: 77,
+			net_amount: 154,
+			discount_percentage: 23,
+			discount_amount: 46,
+			pricing_rules: "RULE-23",
+		});
+
+		expect(item).toMatchObject({
+			rate: 77,
+			price_list_rate: 100,
+			base_price_list_rate: 100,
+			base_rate: 77,
+			net_rate: 77,
+			net_amount: 154,
+			discount_percentage: 23,
+			discount_amount: 46,
+			pricing_rules: "RULE-23",
+		});
+	});
+
+	it("follows authoritative pricing across employee and normal customer changes", () => {
+		const item = { item_code: "ITEM-X" };
+
+		applyCustomerPricing(item, {
+			rate: 90,
+			price_list_rate: 100,
+			discount_percentage: 10,
+			discount_amount: 10,
+			pricing_rules: "EMPLOYEE-RULE",
+		});
+		expect(item.discount_percentage).toBe(10);
+
+		applyCustomerPricing(item, { rate: 100, price_list_rate: 100 });
+		expect(item).toMatchObject({
+			rate: 100,
+			discount_percentage: 0,
+			discount_amount: 0,
+			pricing_rules: "",
+		});
+
+		applyCustomerPricing(item, {
+			rate: 90,
+			price_list_rate: 100,
+			discount_percentage: 10,
+			discount_amount: 10,
+			pricing_rules: "EMPLOYEE-RULE",
+		});
+		expect(item.discount_percentage).toBe(10);
+	});
+
 	it("keeps a missing Item Price at zero instead of using an old list", () => {
 		const item = { item_code: "ITEM-X", rate: 100, price_list_rate: 100 };
 		applyCustomerPricing(item, { rate: 0, price_list_rate: 0 });

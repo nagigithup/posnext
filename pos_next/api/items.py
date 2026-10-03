@@ -1823,6 +1823,8 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):
 			"has_serial_no": item_doc.has_serial_no,
 			"is_stock_item": item_doc.is_stock_item,
 			"pos_profile": pos_profile,
+			"customer": customer,
+			"is_pos": 1,
 			"qty": qty,
 		}
 
