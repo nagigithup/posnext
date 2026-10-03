@@ -19,6 +19,12 @@ body {
 	font-family: inherit;
 }
 
+/* One consistent, high-contrast keyboard focus indicator across the cashier UI. */
+:where(button, a, input, select, textarea, [role="button"]):focus-visible {
+	outline: 2px solid #2563eb !important;
+	outline-offset: 2px !important;
+}
+
 /* Ensure frappe-ui dialogs render above sticky mobile navigation */
 .dialog-overlay {
 	z-index: 400 !important;

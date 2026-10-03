@@ -76,14 +76,17 @@ export function usePaymentNumpad(options = {}) {
 	function handleKeyboardInput(event) {
 		// Check if keyboard input is enabled (e.g., dialog is open)
 		const enabled = typeof isEnabled === "function" ? isEnabled() : isEnabled.value;
-		if (!enabled) return;
+		if (!enabled || event.defaultPrevented) return;
 
 		// Don't handle if user is typing in an input field
 		const activeElement = document.activeElement;
 		const isInInput =
 			activeElement &&
 			(activeElement.tagName === "INPUT" ||
+				activeElement.tagName === "SELECT" ||
 				activeElement.tagName === "TEXTAREA" ||
+				activeElement.tagName === "BUTTON" ||
+				activeElement.tagName === "A" ||
 				activeElement.isContentEditable);
 		if (isInInput) return;
 
@@ -110,8 +113,8 @@ export function usePaymentNumpad(options = {}) {
 			return;
 		}
 
-		// Handle Delete or Escape to clear
-		if (key === "Delete" || key === "Escape") {
+		// Escape is reserved for closing the active dialog.
+		if (key === "Delete") {
 			event.preventDefault();
 			numpadClear();
 			return;

@@ -190,7 +190,7 @@
 				</template>
 				<template #additional-actions>
 					<button
-						v-if="canAccessShiftActions"
+						v-if="canCloseShift"
 						@click="handleCloseShift()"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-orange-50 flex items-center gap-3 transition-colors"
 					>
@@ -521,9 +521,17 @@
 
 			<!-- Shift Closing Dialog -->
 			<ShiftClosingDialog
+				v-if="canSubmitOfficialClosing"
 				v-model="uiStore.showCloseShiftDialog"
 				:opening-shift="shiftStore.currentShift?.name"
 				@shift-closed="handleShiftClosed"
+			/>
+
+			<CashierPreliminaryClosingDialog
+				v-if="canSubmitPreliminaryClosing"
+				v-model="uiStore.showPreliminaryClosingDialog"
+				:opening-shift="shiftStore.currentShift?.name"
+				@submitted="handlePreliminaryClosingSubmitted"
 			/>
 
 			<!-- Draft Invoices Dialog -->
@@ -674,6 +682,73 @@
 				@delete-draft="handleDeleteDraft"
 				@refresh-history="loadInvoiceHistoryData"
 			/>
+
+			<!-- Hala Booking - reuse the existing Desk page inside a POS overlay -->
+			<Transition name="fade">
+				<div
+					v-if="showBookingInvoice"
+					class="fixed inset-0 z-[300] flex items-center justify-center bg-black bg-opacity-50 p-4"
+					role="dialog"
+					aria-modal="true"
+					:aria-label="__('Booking Invoice')"
+					@click.self="showBookingInvoice = false"
+				>
+					<div
+						class="flex h-full max-h-[95vh] w-full max-w-[95vw] flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+					>
+						<div
+							class="flex items-center justify-between border-b bg-gradient-to-r from-indigo-50 to-purple-50 px-6 py-4"
+						>
+							<div class="flex items-center gap-3">
+								<div class="rounded-lg bg-indigo-100 p-2">
+									<svg
+										class="h-6 w-6 text-indigo-600"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+										/>
+									</svg>
+								</div>
+								<h2 class="text-xl font-bold text-gray-900">
+									{{ __("Booking Invoice") }}
+								</h2>
+							</div>
+							<button
+								type="button"
+								class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-white/70 hover:text-gray-900"
+								:aria-label="__('Close')"
+								@click="showBookingInvoice = false"
+							>
+								<svg
+									class="h-5 w-5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M6 18L18 6M6 6l12 12"
+									/>
+								</svg>
+							</button>
+						</div>
+						<iframe
+							ref="bookingInvoiceFrame"
+							src="/desk/hala-booking?embedded=1"
+							class="min-h-0 w-full flex-1 border-0 bg-white"
+							:title="__('Booking Invoice')"
+						/>
+					</div>
+				</div>
+			</Transition>
 
 			<!-- Invoice Detail Dialog -->
 			<InvoiceDetailDialog
@@ -998,6 +1073,7 @@ let _posInitPromise = null;
 
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
+import CashierPreliminaryClosingDialog from "@/components/CashierPreliminaryClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
@@ -1035,9 +1111,12 @@ import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import {
+	canSafelyFallbackFromQZ,
 	hydrateLocalOnlyInvoice,
+	prepareInvoiceForPrinting,
 	printInvoice,
 	printInvoiceByName,
+	printManualWithSilentSetting,
 	printWithSilentFallback,
 } from "@/utils/printInvoice";
 import { qzConnected, connect as qzConnect, disconnect as qzDisconnect } from "@/utils/qzTray";
@@ -1109,6 +1188,15 @@ const { isRTL } = useLocale();
 
 // Component refs
 const itemsSelectorRef = ref(null);
+
+watch(
+	() => [uiStore.showPaymentDialog, uiStore.showCustomerDialog],
+	([paymentOpen, customerOpen], [wasPaymentOpen, wasCustomerOpen]) => {
+		if (!paymentOpen && !customerOpen && (wasPaymentOpen || wasCustomerOpen)) {
+			itemsSelectorRef.value?.focusSearchInput();
+		}
+	}
+);
 const offersDialogRef = ref(null);
 const containerRef = ref(null);
 const dividerRef = ref(null);
@@ -1116,6 +1204,7 @@ const pendingPaymentAfterCustomer = ref(false);
 const logoutAfterClose = ref(false);
 const editCustomer = ref(null); // Customer being edited (null for create mode)
 const showClearCacheDialog = ref(false);
+const preliminarySubmitted = ref(false);
 const clearCacheOverlayRef = ref(null);
 
 // Debounce timer for offer reapplication
@@ -1153,6 +1242,14 @@ const showStockLookup = ref(false);
 
 // Invoice Management dialog
 const showInvoiceManagement = ref(false);
+
+// Hala Booking dialog
+const showBookingInvoice = ref(false);
+const bookingInvoiceFrame = ref(null);
+const handledBookingPrintRequests = new Set();
+
+onMounted(() => window.addEventListener("message", handleBookingPrintRequest));
+onUnmounted(() => window.removeEventListener("message", handleBookingPrintRequest));
 
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
@@ -1217,6 +1314,29 @@ const profileWarehouses = computed(() => {
 });
 
 const canAccessShiftActions = computed(() => shiftStore.hasOpenShift);
+
+const canSubmitOfficialClosing = computed(() =>
+	Boolean(bootstrapStore.data?.can_submit_official_closing)
+);
+const canSubmitPreliminaryClosing = computed(() =>
+	Boolean(bootstrapStore.data?.can_submit_preliminary_closing)
+);
+const hasPreliminaryClosing = computed(
+	() => preliminarySubmitted.value || Boolean(bootstrapStore.data?.has_preliminary_closing)
+);
+const canCloseShift = computed(
+	() =>
+		shiftStore.hasOpenShift &&
+		((canSubmitOfficialClosing.value && !bootstrapStore.data?.has_official_closing_draft) ||
+			(canSubmitPreliminaryClosing.value && !hasPreliminaryClosing.value))
+);
+
+watch(
+	() => shiftStore.currentShift?.name,
+	(newShift, oldShift) => {
+		if (newShift !== oldShift) preliminarySubmitted.value = false;
+	}
+);
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
 const canSwitchToDesk = computed(() => Boolean(bootstrapStore.data?.can_switch_to_desk));
@@ -1838,7 +1958,21 @@ async function handleShiftClosed() {
 	}
 }
 
-function handleItemSelected(item, autoAdd = false) {
+async function handlePreliminaryClosingSubmitted() {
+	preliminarySubmitted.value = true;
+	uiStore.showPreliminaryClosingDialog = false;
+	uiStore.showCloseShiftDialog = false;
+	shiftStore.clearShift();
+	cartStore.clearCart();
+	bootstrapStore.reset();
+	await bootstrapStore.loadInitialData();
+
+	setTimeout(() => {
+		uiStore.showOpenShiftDialog = true;
+	}, 500);
+}
+
+async function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
 		try {
@@ -1855,14 +1989,14 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(
+				await cartStore.addItem(
 					resolvedItem,
 					item.resolved_qty,
 					true,
 					shiftStore.currentProfile
 				);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				await cartStore.addItem(item, 1, true, shiftStore.currentProfile);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -1918,7 +2052,7 @@ function handleItemSelected(item, autoAdd = false) {
 
 	// Add to cart
 	try {
-		cartStore.addItem(item, 1, false, shiftStore.currentProfile);
+		await cartStore.addItem(item, 1, false, shiftStore.currentProfile);
 	} catch (error) {
 		uiStore.showError(
 			__("Insufficient Stock"),
@@ -1940,9 +2074,9 @@ function handleAdditionalDiscountUpdate(discountAmount) {
 	cartStore.rebuildIncrementalCache();
 }
 
-function handleCustomerSelected(selectedCustomer) {
+async function handleCustomerSelected(selectedCustomer) {
 	if (selectedCustomer) {
-		cartStore.setCustomer(selectedCustomer);
+		await cartStore.setCustomer(selectedCustomer);
 		uiStore.showCustomerDialog = false;
 		showSuccess(__("{0} selected", [selectedCustomer.customer_name]));
 
@@ -1951,7 +2085,7 @@ function handleCustomerSelected(selectedCustomer) {
 			uiStore.showPaymentDialog = true;
 		}
 	} else {
-		cartStore.setCustomer(null);
+		await cartStore.setCustomer(null);
 	}
 }
 
@@ -2072,6 +2206,9 @@ async function handlePaymentCompleted(paymentData) {
 				total_discount: cartStore.totalDiscount,
 				write_off_amount: paymentData.write_off_amount || 0,
 				change_amount: paymentData.change_amount || 0,
+				custom_tendered_amount: paymentData.custom_tendered_amount ?? null,
+				custom_change_returned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 				is_credit_sale: paymentData.is_credit_sale ? 1 : 0,
 				receivable_account: paymentData.receivable_account || null,
 				edited_from: editingOfflineContext?.originalOfflineId || null,
@@ -2123,6 +2260,9 @@ async function handlePaymentCompleted(paymentData) {
 				payments: invoiceData.payments,
 				paid_amount: paidAmount,
 				change_amount: paymentData.change_amount || 0,
+				custom_tendered_amount: paymentData.custom_tendered_amount ?? null,
+				custom_change_returned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 				outstanding_amount: Math.max(0, grandTotal - paidAmount),
 				status: Math.max(0, grandTotal - paidAmount) < 0.01 ? "Paid" : "Unpaid",
 				docstatus: 0,
@@ -2141,7 +2281,10 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
-					await handlePrintInvoice({ name: offlineReceiptName });
+					await handlePrintInvoice(
+						{ name: offlineReceiptName },
+						{ automatic: true }
+					);
 					showSuccess(
 						__(
 							"Invoice {0} saved offline and sent to printer — will sync when online",
@@ -2153,8 +2296,8 @@ async function handlePaymentCompleted(paymentData) {
 					uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
 					showWarning(
 						__(
-							"Invoice {0} saved offline but print failed — open Print from the success dialog",
-							[offlineReceiptName]
+							"Invoice {0} saved offline but print failed: {1}",
+							[offlineReceiptName, error?.message || __("Unknown printing error")]
 						)
 					);
 				}
@@ -2169,6 +2312,10 @@ async function handlePaymentCompleted(paymentData) {
 			const result = await cartStore.submitInvoice({
 				isCreditSale: Boolean(paymentData.is_credit_sale),
 				receivableAccount: paymentData.receivable_account || null,
+				changeAmount: paymentData.change_amount || 0,
+				tenderedAmount: paymentData.custom_tendered_amount ?? null,
+				changeReturned:
+					paymentData.custom_change_returned ?? paymentData.change_amount ?? 0,
 			});
 
 			if (result) {
@@ -2220,11 +2367,19 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						await handlePrintInvoice({ name: invoiceName });
+						await handlePrintInvoice(
+							{ name: invoiceName },
+							{ automatic: true }
+						);
 						showSuccess(__("Invoice {0} created and sent to printer", [invoiceName]));
 					} catch (error) {
 						log.error("Auto-print error:", error);
-						showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+						showWarning(
+							__("Invoice {0} created but print failed: {1}", [
+								invoiceName,
+								error?.message || __("Unknown printing error"),
+							])
+						);
 					}
 				} else {
 					uiStore.showSuccess(invoiceName, invoiceTotal, paidAmount);
@@ -2307,7 +2462,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(
+					await cartStore.addItem(
 						variant,
 						cartStore.pendingItemQty,
 						false,
@@ -2343,7 +2498,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -2359,11 +2514,15 @@ async function handleOptionSelected(option) {
 }
 
 function handleCloseShift() {
-	if (!canAccessShiftActions.value) {
+	if (!canCloseShift.value) {
 		return;
 	}
 
-	uiStore.showCloseShiftDialog = true;
+	if (canSubmitOfficialClosing.value) {
+		uiStore.showCloseShiftDialog = true;
+	} else {
+		uiStore.showPreliminaryClosingDialog = true;
+	}
 }
 
 function openDraftDialog() {
@@ -2456,7 +2615,7 @@ async function handleLoadDraft(draft) {
 
 		const draftData = await draftsStore.loadDraft(draft);
 		cartStore.invoiceItems = draftData.items;
-		cartStore.setCustomer(draftData.customer);
+		await cartStore.setCustomer(draftData.customer);
 		cartStore.currentDraftId = draft.draft_id; // Set current draft ID
 
 		// Rebuild incremental cache to recalculate totals
@@ -2503,7 +2662,7 @@ async function handleApplyOffer(offer) {
 	}
 }
 
-function handleBatchSerialSelected(batchSerial) {
+async function handleBatchSerialSelected(batchSerial) {
 	if (cartStore.pendingItem) {
 		// Use quantity from batchSerial if provided (for multiple serial numbers), otherwise use pendingItemQty
 		const qty = batchSerial.quantity || cartStore.pendingItemQty;
@@ -2513,7 +2672,7 @@ function handleBatchSerialSelected(batchSerial) {
 			...batchSerial,
 		};
 		try {
-			cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+			await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 			cartStore.clearPendingItem();
 		} catch (error) {
 			showError(error.message);
@@ -2522,7 +2681,7 @@ function handleBatchSerialSelected(batchSerial) {
 }
 
 async function handleCustomerCreated(newCustomer) {
-	cartStore.setCustomer(newCustomer);
+	await cartStore.setCustomer(newCustomer);
 	uiStore.showCreateCustomerDialog = false;
 	editCustomer.value = null; // Clear edit mode
 
@@ -2533,7 +2692,7 @@ async function handleCustomerCreated(newCustomer) {
 }
 
 async function handleCustomerUpdated(updatedCustomer) {
-	cartStore.setCustomer(updatedCustomer);
+	await cartStore.setCustomer(updatedCustomer);
 	uiStore.showCreateCustomerDialog = false;
 	editCustomer.value = null; // Clear edit mode
 
@@ -2655,14 +2814,14 @@ async function handleEditOfflineInvoice(invoice) {
 		const invoiceData = invoice.data;
 
 		if (invoiceData.customer) {
-			cartStore.setCustomer(invoiceData.customer);
+			await cartStore.setCustomer(invoiceData.customer);
 		}
 
 		if (invoiceData.items && invoiceData.items.length > 0) {
 			for (const item of invoiceData.items) {
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
-				cartStore.addItem(
+				await cartStore.addItem(
 					item,
 					item.quantity || item.qty || 1,
 					true,
@@ -2869,6 +3028,10 @@ function handleManagementMenuClick(menuItem) {
 		// Load drafts data
 		draftsStore.loadDrafts();
 		showInvoiceManagement.value = true;
+	} else if (menuItem === "booking") {
+		showBookingInvoice.value = true;
+	} else if (menuItem === "deposit") {
+		window.location.assign("/desk/hala-deposit");
 	} else if (menuItem === "products") {
 		// Open Stock Lookup dialog in search mode
 		showStockLookup.value = true;
@@ -2940,7 +3103,10 @@ function handleViewInvoice(invoice) {
 }
 
 // Centralized print handler - uses printInvoice.js utilities
-async function handlePrintInvoice(invoiceData) {
+async function handlePrintInvoice(
+	invoiceData,
+	{ automatic = false, printFormat = null, letterhead = null } = {}
+) {
 	try {
 		invoiceData = await hydrateLocalOnlyInvoice(invoiceData || {});
 		const offlineSnapshot = uiStore.lastOfflinePrintDoc;
@@ -2952,13 +3118,36 @@ async function handlePrintInvoice(invoiceData) {
 			invoiceData = offlineSnapshot;
 		}
 
-		// Silent print path — send directly to thermal printer via QZ Tray
-		if (posSettingsStore.silentPrint) {
-			const result = await printWithSilentFallback(invoiceData);
-			if (result.method === "browser") {
-				log.info("Used browser print fallback");
+		if (automatic) {
+			const prepared = await prepareInvoiceForPrinting(
+				invoiceData,
+				printFormat,
+				letterhead
+			);
+			if (posSettingsStore.silentPrint && qzConnected.value) {
+				try {
+					return await printWithSilentFallback(
+						prepared.invoiceData,
+						prepared.printFormat,
+						prepared.letterhead
+					);
+				} catch (error) {
+					if (!canSafelyFallbackFromQZ(error)) throw error;
+					log.warn("QZ was unavailable before dispatch; using browser print:", error.message);
+				}
 			}
-			return;
+
+			await printInvoice(
+				prepared.invoiceData,
+				prepared.printFormat,
+				prepared.letterhead
+			);
+			return { method: "browser", success: true, printFormat: prepared.printFormat };
+		}
+
+		// Preserve the pre-existing manual button behavior.
+		if (posSettingsStore.silentPrint) {
+			return await printManualWithSilentSetting(invoiceData);
 		}
 
 		// Standard browser print path
@@ -2971,11 +3160,37 @@ async function handlePrintInvoice(invoiceData) {
 		}
 	} catch (error) {
 		log.error("Error printing invoice:", error);
+		if (automatic) throw error;
 		window.frappe?.msgprint({
 			title: "Error",
-			message: "Failed to print invoice",
+			message: error?.message || "Failed to print invoice",
 			indicator: "red",
 		});
+	}
+}
+
+async function handleBookingPrintRequest(event) {
+	if (
+		event.origin !== window.location.origin ||
+		event.source !== bookingInvoiceFrame.value?.contentWindow ||
+		event.data?.type !== "hala-booking-print-sales-invoice"
+	) {
+		return;
+	}
+
+	const { requestId, invoiceName, printFormat } = event.data;
+	if (!requestId || !invoiceName || handledBookingPrintRequests.has(requestId)) return;
+	handledBookingPrintRequests.add(requestId);
+
+	try {
+		await handlePrintInvoice(
+			{ name: invoiceName },
+			{ automatic: true, printFormat: printFormat || "Standard" }
+		);
+	} catch (error) {
+		// Printing is best-effort and must never make a completed invoice look failed.
+		log.warn("Booking invoice printing was unavailable:", error?.message || error);
+		showWarning(error?.message || __("Booking invoice printing was unavailable."));
 	}
 }
 

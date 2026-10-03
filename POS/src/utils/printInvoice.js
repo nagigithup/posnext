@@ -1,13 +1,45 @@
+import html2canvas from "html2canvas";
 import { call } from "@/utils/apiWrapper";
 import { logger } from "@/utils/logger";
 import { getOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
 import { getOfflineInvoiceByOfflineId } from "@/utils/offline/sync";
 import { offlineWorker } from "@/utils/offline/workerClient";
-import { printHTML as qzPrintHTML } from "@/utils/qzTray";
+import { nativeBrowserPrint } from "@/utils/nativeBrowserPrint";
+import { printHTML as qzPrintHTML, printImageBase64, printPDFBase64 } from "@/utils/qzTray";
 
 const log = logger.create("PrintInvoice");
 
 const DEFAULT_PRINT_FORMAT = "POS Next Receipt";
+const RECEIPT_WIDTH_MM = 80;
+const CSS_PIXELS_PER_INCH = 96;
+const MM_PER_INCH = 25.4;
+const MIN_RECEIPT_HEIGHT_MM = 40;
+const MAX_RECEIPT_HEIGHT_MM = 5000;
+const THERMAL_MEASUREMENT_STYLE = `
+	html, body {
+		width: 80mm !important;
+		max-width: 80mm !important;
+		min-height: 0 !important;
+		height: auto !important;
+		margin: 0 !important;
+		box-sizing: border-box !important;
+	}
+	.print-format {
+		width: 80mm !important;
+		max-width: 80mm !important;
+		min-height: 0 !important;
+		height: auto !important;
+		margin: 0 !important;
+		box-sizing: border-box !important;
+		page-break-after: auto !important;
+	}
+`;
+const OFFLINE_ARABIC_RENDER_STYLE = `
+	body { font-family: 'DejaVu Sans', Arial, sans-serif !important; }
+`;
+const completedAutomaticPrints = new Set();
+const uncertainAutomaticPrints = new Set();
+const automaticPrintJobs = new Map();
 
 // ============================================================================
 // Shared helpers
@@ -29,10 +61,7 @@ function derivePaidAmount(invoiceData) {
 
 /** Sales Invoices not yet on the server (offline queue / local receipt id). */
 export function isLocalOnlyInvoiceName(name) {
-	return (
-		typeof name === "string" &&
-		(name.startsWith("OFFLINE-") || name.startsWith("pos_offline_"))
-	);
+	return typeof name === "string" && (name.startsWith("OFFLINE-") || name.startsWith("pos_offline_"));
 }
 
 /**
@@ -76,6 +105,8 @@ function receiptDocFromQueuedInvoice(offlineId, raw) {
 		payments,
 		paid_amount: paidAmount,
 		change_amount: Number.parseFloat(raw.change_amount) || 0,
+		custom_tendered_amount: raw.custom_tendered_amount ?? null,
+		custom_change_returned: raw.custom_change_returned ?? (Number.parseFloat(raw.change_amount) || 0),
 		outstanding_amount: Math.max(0, grandTotal - paidAmount),
 		status: grandTotal - paidAmount < 0.01 ? "Paid" : "Unpaid",
 		docstatus: 0,
@@ -176,23 +207,15 @@ export function buildReceiptHTML(invoiceData) {
 							${
 								hasDiscount
 									? `<div class="item-discount"><span>Discount ${
-											item.discount_percentage
-												? `(${Number(item.discount_percentage).toFixed(
-														2
-												  )}%)`
-												: ""
-									  }</span><span>-${formatCurrency(
-											item.discount_amount || 0
-									  )}</span></div>`
+											item.discount_percentage ? `(${Number(item.discount_percentage).toFixed(2)}%)` : ""
+										}</span><span>-${formatCurrency(item.discount_amount || 0)}</span></div>`
 									: ""
 							}
 							${
 								item.serial_no
 									? `<div class="item-serials"><div class="item-serials-label">${__(
-											"Serial No:"
-									  )}</div><div class="item-serials-list">${String(
-											item.serial_no
-									  ).replace(/\n/g, ", ")}</div></div>`
+											"Serial No:",
+										)}</div><div class="item-serials-list">${String(item.serial_no).replace(/\n/g, ", ")}</div></div>`
 									: ""
 							}
 						</div>`;
@@ -211,23 +234,23 @@ export function buildReceiptHTML(invoiceData) {
 				<div class="invoice-info">
 					<div><span>${__("Invoice #:")}</span><span><strong>${invoiceData.name}</strong></span></div>
 					<div><span>${__("Date:")}</span><span>${new Date(
-		invoiceData.posting_date || Date.now()
-	).toLocaleString()}</span></div>
+						invoiceData.posting_date || Date.now(),
+					).toLocaleString()}</span></div>
 					${
 						invoiceData.customer_name || invoiceData.customer
 							? `<div><span>${__("Customer:")}</span><span>${
 									invoiceData.customer_name || invoiceData.customer
-							  }</span></div>`
+								}</span></div>`
 							: ""
 					}
 					${
 						invoiceData.status === "Partly Paid" ||
-						(invoiceData.outstanding_amount &&
-							invoiceData.outstanding_amount > 0 &&
-							invoiceData.outstanding_amount < invoiceData.grand_total)
-							? `<div class="partial-status"><span>${__("Status:")}</span><span>${__(
-									"PARTIAL PAYMENT"
-							  )}</span></div>`
+						(
+							invoiceData.outstanding_amount &&
+								invoiceData.outstanding_amount > 0 &&
+								invoiceData.outstanding_amount < invoiceData.grand_total
+						)
+							? `<div class="partial-status"><span>${__("Status:")}</span><span>${__("PARTIAL PAYMENT")}</span></div>`
 							: ""
 					}
 				</div>
@@ -238,16 +261,14 @@ export function buildReceiptHTML(invoiceData) {
 
 				<div class="totals">
 					${
-						invoiceData.total_taxes_and_charges &&
-						invoiceData.total_taxes_and_charges > 0
+						invoiceData.total_taxes_and_charges && invoiceData.total_taxes_and_charges > 0
 							? `
 					<div class="total-row"><span>${__("Subtotal:")}</span><span>${formatCurrency(
-									(invoiceData.grand_total || 0) -
-										(invoiceData.total_taxes_and_charges || 0)
-							  )}</span></div>
+						(invoiceData.grand_total || 0) - (invoiceData.total_taxes_and_charges || 0),
+					)}</span></div>
 					<div class="total-row"><span>${__("Tax:")}</span><span>${formatCurrency(
-									invoiceData.total_taxes_and_charges
-							  )}</span></div>`
+						invoiceData.total_taxes_and_charges,
+					)}</span></div>`
 							: ""
 					}
 					${
@@ -255,18 +276,14 @@ export function buildReceiptHTML(invoiceData) {
 							? `
 					<div class="total-row" style="color: #28a745;"><span>Additional Discount${
 						invoiceData.additional_discount_percentage
-							? ` (${Number(invoiceData.additional_discount_percentage).toFixed(
-									1
-							  )}%)`
+							? ` (${Number(invoiceData.additional_discount_percentage).toFixed(1)}%)`
 							: ""
-					}:</span><span>-${formatCurrency(
-									Math.abs(invoiceData.discount_amount)
-							  )}</span></div>`
+					}:</span><span>-${formatCurrency(Math.abs(invoiceData.discount_amount))}</span></div>`
 							: ""
 					}
 					<div class="total-row grand-total"><span>${__("TOTAL:")}</span><span>${formatCurrency(
-		invoiceData.grand_total
-	)}</span></div>
+						invoiceData.grand_total,
+					)}</span></div>
 				</div>
 
 				${
@@ -279,28 +296,35 @@ export function buildReceiptHTML(invoiceData) {
 							(p) =>
 								`<div class="payment-row"><span>${
 									p.mode_of_payment
-								}:</span><span>${formatCurrency(p.amount)}</span></div>`
+								}:</span><span>${formatCurrency(p.amount)}</span></div>`,
 						)
 						.join("")}
 					<div class="payment-row total-paid"><span>${__("Total Paid:")}</span><span>${formatCurrency(
-								paidAmount
-						  )}</span></div>
+						paidAmount,
+					)}</span></div>
 					${
-						invoiceData.change_amount && invoiceData.change_amount > 0
+						invoiceData.custom_tendered_amount != null
 							? `<div class="payment-row" style="font-weight: bold; margin-top: 5px;"><span>${__(
-									"Change:"
-							  )}</span><span>${formatCurrency(
-									invoiceData.change_amount
-							  )}</span></div>`
+									"المبلغ المدفوع",
+								)}<br><small>${__("Received / Tendered")}</small></span><span>${formatCurrency(
+									invoiceData.custom_tendered_amount,
+								)}</span></div>`
+							: ""
+					}
+					${
+						(invoiceData.custom_change_returned ?? invoiceData.change_amount) > 0
+							? `<div class="payment-row" style="font-weight: bold; margin-top: 5px;"><span>${__(
+									"المبلغ المرتجع",
+								)}<br><small>${__("Change Returned")}</small></span><span>${formatCurrency(
+									invoiceData.custom_change_returned ?? invoiceData.change_amount,
+								)}</span></div>`
 							: ""
 					}
 					${
 						invoiceData.outstanding_amount && invoiceData.outstanding_amount > 0
 							? `<div class="outstanding-row"><span>${__(
-									"BALANCE DUE:"
-							  )}</span><span>${formatCurrency(
-									invoiceData.outstanding_amount
-							  )}</span></div>`
+									"BALANCE DUE:",
+								)}</span><span>${formatCurrency(invoiceData.outstanding_amount)}</span></div>`
 							: ""
 					}
 				</div>`
@@ -323,10 +347,10 @@ function buildReceiptDocumentHTML(invoiceData, { includeControls = false } = {})
 		? `
 			<div class="no-print" style="text-align: center; margin-top: 20px;">
 				<button onclick="window.print()" style="padding: 10px 20px; font-size: 14px; cursor: pointer;">${__(
-					"Print Receipt"
+					"Print Receipt",
 				)}</button>
 				<button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; cursor: pointer; margin-left: 10px;">${__(
-					"Close"
+					"Close",
 				)}</button>
 			</div>`
 		: "";
@@ -372,62 +396,67 @@ async function resolvePrintSettings(posProfile, printFormat, letterhead) {
 	return { printFormat: DEFAULT_PRINT_FORMAT, letterhead };
 }
 
+/**
+ * Hydrate the invoice and resolve its saved POS Profile print settings once.
+ * The returned format is then shared by QZ and the safe browser fallback.
+ */
+export async function prepareInvoiceForPrinting(invoiceData, printFormat = null, letterhead = null) {
+	let invoiceDoc = await hydrateLocalOnlyInvoice(invoiceData);
+	if (!invoiceDoc?.name) throw new Error("Invalid invoice data — missing name");
+
+	if (!isLocalOnlyInvoiceName(invoiceDoc.name) && !invoiceDoc.pos_profile) {
+		invoiceDoc = await call("pos_next.api.invoices.get_invoice", {
+			invoice_name: invoiceDoc.name,
+		});
+		if (!invoiceDoc) throw new Error("Invoice not found");
+	}
+
+	const settings = await resolvePrintSettings(invoiceDoc.pos_profile, printFormat, letterhead);
+	return { invoiceData: invoiceDoc, ...settings };
+}
+
 // ============================================================================
-// Browser printing (opens /printview in a new window)
+// Browser-native printing
 // ============================================================================
 
 /**
- * Open Frappe's /printview in a new browser window.
- * The page includes trigger_print=1 so the OS print dialog appears automatically.
- * Falls back to the hardcoded receipt template if the popup is blocked.
+ * Print Frappe's /printview through the shared hidden-iframe helper.
+ * Chrome decides whether window.print() opens a dialog or prints silently when
+ * launched with --kiosk-printing. Offline receipts keep their existing fallback.
  */
 export async function printInvoice(invoiceData, printFormat = null, letterhead = null) {
+	let printableInvoice = invoiceData;
 	try {
 		if (!invoiceData?.name) throw new Error("Invalid invoice data");
 
-		invoiceData = await hydrateLocalOnlyInvoice(invoiceData);
+		printableInvoice = await hydrateLocalOnlyInvoice(invoiceData);
 
 		// Pending offline / local IDs are not in ERPNext — use embedded receipt HTML.
-		if (isLocalOnlyInvoiceName(invoiceData.name)) {
-			if (invoiceData.items?.length > 0) return printInvoiceCustom(invoiceData);
+		if (isLocalOnlyInvoiceName(printableInvoice.name)) {
+			if (printableInvoice.items?.length > 0) return printInvoiceCustom(printableInvoice);
 			throw new Error(
-				__(
-					"This offline receipt is no longer in browser storage. Sync the invoice, then print from history."
-				)
+				__("This offline receipt is no longer in browser storage. Sync the invoice, then print from history."),
 			);
 		}
 
-		const doctype = invoiceData.doctype || "Sales Invoice";
+		const doctype = printableInvoice.doctype || "Sales Invoice";
 		const format = printFormat || DEFAULT_PRINT_FORMAT;
-
-		const params = new URLSearchParams({
-			doctype,
-			name: invoiceData.name,
-			format,
-			no_letterhead: letterhead ? 0 : 1,
-			_lang: "en",
-			trigger_print: 1,
-			_t: Date.now(),
+		return nativeBrowserPrint(doctype, printableInvoice.name, format, {
+			letterhead,
+			language: "en",
 		});
-		if (letterhead) params.append("letterhead", letterhead);
-
-		const printWindow = window.open(`/printview?${params}`, "_blank", "width=800,height=600");
-		if (!printWindow) {
-			throw new Error("Popup blocked — check your browser settings.");
-		}
-		return true;
 	} catch (error) {
 		log.error("Browser print failed:", error);
-		if (isLocalOnlyInvoiceName(invoiceData?.name) && !(invoiceData.items?.length > 0)) {
+		if (isLocalOnlyInvoiceName(printableInvoice?.name) && !(printableInvoice.items?.length > 0)) {
 			throw error;
 		}
-		return printInvoiceCustom(invoiceData);
+		return printInvoiceCustom(printableInvoice);
 	}
 }
 
 /**
  * Fetch an invoice by name, resolve its POS Profile print settings,
- * then open the browser print window.
+ * then print it through the hidden native browser frame.
  */
 export async function printInvoiceByName(invoiceName, printFormat = null, letterhead = null) {
 	if (isLocalOnlyInvoiceName(invoiceName)) {
@@ -435,8 +464,8 @@ export async function printInvoiceByName(invoiceName, printFormat = null, letter
 		if (!localDoc.items?.length) {
 			throw new Error(
 				__(
-					"This offline receipt is no longer in browser storage. Complete checkout again or sync, then print from history."
-				)
+					"This offline receipt is no longer in browser storage. Complete checkout again or sync, then print from history.",
+				),
 			);
 		}
 		const settings = await resolvePrintSettings(localDoc.pos_profile, printFormat, letterhead);
@@ -477,82 +506,217 @@ export async function silentPrintDoc(doctype, name, printFormat) {
 	return true;
 }
 
-/**
- * Fetch the server-rendered print HTML and send it to a thermal printer
- * via QZ Tray. Uses Frappe's get_html_and_style API which returns the
- * print format HTML + its inline styles (standard.css, print style, custom CSS).
- * Note: print.bundle.css (Bootstrap grid/tables) is NOT included — print
- * formats that rely on Bootstrap layout classes may render differently.
- * Paper size and margins are controlled by the QZ Tray config in qzTray.js.
- */
-export async function silentPrintInvoice(invoiceName, printFormat = null) {
-	if (isLocalOnlyInvoiceName(invoiceName)) {
-		const doc = await hydrateLocalOnlyInvoice({ name: invoiceName });
-		if (doc.items?.length > 0) return silentPrintInvoiceFromDoc(doc);
-		throw new Error(
-			__(
-				"This offline receipt is no longer in browser storage. Use browser print from the success dialog after checkout."
-			)
-		);
-	}
-	const format = printFormat || DEFAULT_PRINT_FORMAT;
+/** Preserve the existing manual-print behavior; the rendered PDF path is automatic-only. */
+export async function printManualWithSilentSetting(invoiceData, printFormat = null) {
+	const hydrated = await hydrateLocalOnlyInvoice(invoiceData);
+	const invoiceName = hydrated?.name;
+	if (!invoiceName) throw new Error("Invalid invoice data — missing name");
 
-	await silentPrintDoc("Sales Invoice", invoiceName, format);
-	log.info(`Silent print sent for ${invoiceName}`);
-	return true;
+	if (isLocalOnlyInvoiceName(invoiceName) && hydrated.items?.length > 0) {
+		try {
+			await qzPrintHTML(buildReceiptDocumentHTML(hydrated, { includeControls: false }));
+			flagOfflineInvoicePrinted(invoiceName);
+			return { method: "silent", success: true };
+		} catch (error) {
+			log.warn("Manual QZ print failed; using the existing browser print fallback:", error?.message || error);
+			printInvoiceCustom(hydrated);
+			return { method: "browser", success: true };
+		}
+	}
+
+	try {
+		await silentPrintDoc("Sales Invoice", invoiceName, printFormat || DEFAULT_PRINT_FORMAT);
+		return { method: "silent", success: true };
+	} catch (error) {
+		log.warn("Manual QZ print failed; using the existing browser print fallback:", error?.message || error);
+		await printInvoiceByName(invoiceName, printFormat);
+		return { method: "browser", success: true };
+	}
 }
 
 /**
- * Silent-print a full invoice dict using the same HTML as the offline receipt fallback.
+ * Convert rendered CSS pixels to a thermal receipt height. The small footer
+ * allowance prevents the final row from being clipped by printer rounding.
  */
+export function pixelsToReceiptHeightMm(pixelHeight) {
+	const height = Math.ceil((Number(pixelHeight) * MM_PER_INCH) / CSS_PIXELS_PER_INCH + 3);
+	if (!Number.isFinite(height) || height > MAX_RECEIPT_HEIGHT_MM) {
+		throw new Error(__("The receipt is too long to print automatically."));
+	}
+	return Math.max(MIN_RECEIPT_HEIGHT_MM, height);
+}
+
+function printableDocument(html, style = "") {
+	if (/<!doctype|<html[\s>]/i.test(html)) {
+		const assets = `<base href="${window.location.origin}/"><style>${style}</style>`;
+		return html.replace(/<head([^>]*)>/i, `<head$1>${assets}`);
+	}
+	return `<!DOCTYPE html><html><head><meta charset="UTF-8"><base href="${
+		window.location.origin
+	}/"><style>${style}</style></head><body>${html}</body></html>`;
+}
+
+async function waitForPrintableAssets(doc) {
+	if (doc.fonts?.ready) await doc.fonts.ready;
+	await Promise.all(
+		Array.from(doc.images).map(async (img) => {
+			if (!img.complete) {
+				await new Promise((resolve) => {
+					img.addEventListener("load", resolve, { once: true });
+					img.addEventListener("error", resolve, { once: true });
+				});
+			}
+			if (img.decode) await img.decode().catch(() => {});
+		}),
+	);
+	await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function withRenderedReceipt(html, style, callback) {
+	const iframe = document.createElement("iframe");
+	iframe.setAttribute("aria-hidden", "true");
+	iframe.style.cssText =
+		"position:fixed;left:-10000px;top:0;width:80mm;height:1px;border:0;opacity:0;pointer-events:none;";
+	document.body.appendChild(iframe);
+
+	try {
+		await new Promise((resolve, reject) => {
+			iframe.onload = resolve;
+			iframe.onerror = () => reject(new Error("Receipt renderer failed to load."));
+			iframe.srcdoc = printableDocument(html, style);
+		});
+		const doc = iframe.contentDocument;
+		await waitForPrintableAssets(doc);
+		const root = doc.documentElement;
+		const body = doc.body;
+		const pixelHeight = Math.max(root.scrollHeight, body.scrollHeight, body.offsetHeight);
+		return await callback({ iframe, doc, root, body, pixelHeight });
+	} finally {
+		iframe.remove();
+	}
+}
+
+async function getServerPrintMarkup(invoiceName, printFormat, letterhead) {
+	const result = await call("frappe.www.printview.get_html_and_style", {
+		doc: "Sales Invoice",
+		name: invoiceName,
+		print_format: printFormat,
+		no_letterhead: letterhead ? 0 : 1,
+		letterhead: letterhead || undefined,
+	});
+	const payload = result?.message || result;
+	if (!payload?.html) throw new Error(__("Failed to render the selected Print Format."));
+	return payload;
+}
+
+/** Server invoices use Frappe/wkhtmltopdf, which already shapes Arabic correctly. */
+export async function silentPrintInvoice(invoiceName, printFormat = DEFAULT_PRINT_FORMAT, letterhead = null) {
+	if (isLocalOnlyInvoiceName(invoiceName)) {
+		const doc = await hydrateLocalOnlyInvoice({ name: invoiceName });
+		if (doc.items?.length > 0) return silentPrintInvoiceFromDoc(doc);
+		throw new Error(__("This offline receipt is no longer in browser storage."));
+	}
+
+	const markup = await getServerPrintMarkup(invoiceName, printFormat, letterhead);
+	const pageHeight = await withRenderedReceipt(
+		markup.html,
+		`${markup.style || ""}\n${THERMAL_MEASUREMENT_STYLE}`,
+		({ pixelHeight }) => pixelsToReceiptHeightMm(pixelHeight),
+	);
+	const result = await call("pos_next.api.printing.get_qz_receipt_pdf", {
+		invoice_name: invoiceName,
+		print_format: printFormat,
+		page_height_mm: pageHeight,
+		letterhead: letterhead || null,
+	});
+	const payload = result?.message || result;
+	if (!payload?.pdf_base64) throw new Error(__("The receipt PDF generator returned no data."));
+	await printPDFBase64(payload.pdf_base64, null, {
+		width: Number(payload.width_mm) || RECEIPT_WIDTH_MM,
+		height: Number(payload.height_mm) || pageHeight,
+		jobName: `POS Next Receipt ${invoiceName}`,
+	});
+	log.info(`Rendered PDF receipt sent for ${invoiceName}`);
+	return true;
+}
+
+/** Local-only invoices remain entirely browser-side and are sent as a shaped PNG. */
 export async function silentPrintInvoiceFromDoc(invoiceData) {
-	const fullHTML = buildReceiptDocumentHTML(invoiceData, { includeControls: false });
-	await qzPrintHTML(fullHTML);
-	log.info(`Silent print (local receipt) for ${invoiceData?.name}`);
+	const fullHTML = buildReceiptDocumentHTML(invoiceData, {
+		includeControls: false,
+	});
+	await withRenderedReceipt(fullHTML, OFFLINE_ARABIC_RENDER_STYLE, async ({ body, pixelHeight }) => {
+		const pageHeight = pixelsToReceiptHeightMm(pixelHeight);
+		const canvas = await html2canvas(body, {
+			backgroundColor: "#ffffff",
+			logging: false,
+			scale: pixelHeight > 8000 ? 1 : 2,
+			useCORS: true,
+			windowWidth: body.scrollWidth,
+			windowHeight: pixelHeight,
+		});
+		const base64 = canvas.toDataURL("image/png").split(",", 2)[1];
+		await printImageBase64(base64, null, {
+			width: RECEIPT_WIDTH_MM,
+			height: pageHeight,
+			jobName: `POS Next Offline Receipt ${invoiceData.name}`,
+		});
+	});
+	log.info(`Rendered PNG receipt sent for local invoice ${invoiceData?.name}`);
 	flagOfflineInvoicePrinted(invoiceData?.name);
 	return true;
 }
 
+export function canSafelyFallbackFromQZ(error) {
+	return !error?.dispatchAttempted && ["QZ_UNAVAILABLE", "QZ_PRINTER_NOT_CONFIGURED"].includes(error?.code);
+}
+
 /**
- * Try silent print, fall back to browser print on failure.
- * silentPrintInvoice → qzPrintHTML → connect() handles auto-reconnect
- * internally, so no separate connection logic is needed here.
+ * Dispatch one automatic receipt job per invoice. This function intentionally
+ * does not open browser printing: callers may only do that for a known
+ * pre-dispatch availability/configuration failure.
  */
-export async function printWithSilentFallback(invoiceData, printFormat = null) {
-	invoiceData = await hydrateLocalOnlyInvoice(invoiceData);
-	const invoiceName = invoiceData?.name;
-	if (!invoiceName) throw new Error("Invalid invoice data — missing name");
+export async function printWithSilentFallback(invoiceData, printFormat = null, letterhead = null) {
+	const prepared = await prepareInvoiceForPrinting(invoiceData, printFormat, letterhead);
+	const invoiceName = prepared.invoiceData.name;
 
-	if (isLocalOnlyInvoiceName(invoiceName) && invoiceData.items?.length > 0) {
+	if (completedAutomaticPrints.has(invoiceName)) {
+		return { method: "silent", success: true, duplicatePrevented: true };
+	}
+	if (uncertainAutomaticPrints.has(invoiceName)) {
+		throw new Error(
+			__(
+				"The previous QZ print result is unknown. To avoid a duplicate receipt, use the manual Print button after checking the printer.",
+			),
+		);
+	}
+	if (automaticPrintJobs.has(invoiceName)) return automaticPrintJobs.get(invoiceName);
+
+	const job = (async () => {
 		try {
-			await silentPrintInvoiceFromDoc(invoiceData);
-			return { method: "silent", success: true };
-		} catch (err) {
-			log.warn("Silent local receipt failed, falling back to browser:", err?.message || err);
+			if (isLocalOnlyInvoiceName(invoiceName)) {
+				if (!prepared.invoiceData.items?.length) {
+					throw new Error(__("This offline receipt is no longer in browser storage."));
+				}
+				await silentPrintInvoiceFromDoc(prepared.invoiceData);
+			} else {
+				await silentPrintInvoice(invoiceName, prepared.printFormat, prepared.letterhead);
+			}
+			completedAutomaticPrints.add(invoiceName);
+			return {
+				method: "silent",
+				success: true,
+				printFormat: prepared.printFormat,
+			};
+		} catch (error) {
+			if (error?.dispatchAttempted) uncertainAutomaticPrints.add(invoiceName);
+			throw error;
+		} finally {
+			automaticPrintJobs.delete(invoiceName);
 		}
-		try {
-			printInvoiceCustom(invoiceData);
-			return { method: "browser", success: true };
-		} catch (err) {
-			log.error("Browser print for local receipt failed:", err);
-			return { method: "browser", success: false };
-		}
-	}
-
-	try {
-		await silentPrintInvoice(invoiceName, printFormat);
-		return { method: "silent", success: true };
-	} catch (err) {
-		log.warn("Silent print failed, falling back to browser:", err?.message || err);
-	}
-
-	try {
-		await printInvoiceByName(invoiceName, printFormat);
-		return { method: "browser", success: true };
-	} catch (err) {
-		log.error("Browser print fallback also failed:", err);
-		return { method: "browser", success: false };
-	}
+	})();
+	automaticPrintJobs.set(invoiceName, job);
+	return job;
 }
 
 // ============================================================================
@@ -570,7 +734,9 @@ export function printInvoiceCustom(invoiceData) {
 		throw new Error(__("Popup blocked — check your browser settings."));
 	}
 
-	const printContent = buildReceiptDocumentHTML(invoiceData, { includeControls: true });
+	const printContent = buildReceiptDocumentHTML(invoiceData, {
+		includeControls: true,
+	});
 
 	printWindow.document.write(printContent);
 	printWindow.document.close();

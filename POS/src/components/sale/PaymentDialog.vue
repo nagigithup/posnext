@@ -9,6 +9,9 @@
 		<template #body-content>
 			<!-- Two Column Layout - auto-sized on mobile, constrained on desktop -->
 			<div
+				ref="paymentDialogContentRef"
+				tabindex="-1"
+				@keydown="handlePaymentDialogKeydown"
 				:class="[
 					'grid grid-cols-1 lg:grid-cols-5 items-stretch',
 					dynamicGap,
@@ -1127,6 +1130,7 @@
 								@pointerup="onPaymentMethodUp(method)"
 								@pointerleave="onPaymentMethodCancel"
 								@pointercancel="onPaymentMethodCancel"
+								@keydown.enter.stop.prevent="selectPaymentMethod(method)"
 								:disabled="
 									isWalletPaymentMethod(method.mode_of_payment) &&
 									availableWalletBalance <= 0 &&
@@ -1430,6 +1434,8 @@
 									>
 									<input
 										v-model="mobileCustomAmount"
+										data-payment-primary
+										@keydown.enter.stop.prevent="addMobileCustomPayment"
 										type="number"
 										inputmode="decimal"
 										:placeholder="
@@ -1698,6 +1704,11 @@
 					>
 						<!-- Amount Display -->
 						<div
+							data-payment-primary
+							tabindex="0"
+							role="spinbutton"
+							:aria-label="__('Payment amount')"
+							:aria-valuenow="numpadValue"
 							:class="[
 								'bg-gray-100 rounded-lg',
 								isCompactMode ? 'p-2 mb-2' : 'p-3 mb-3',
@@ -2016,6 +2027,7 @@ import { useLongPress } from "@/composables/useLongPress";
 import { usePaymentNumpad } from "@/composables/usePaymentNumpad";
 import { useResponsivePayment } from "@/composables/useResponsivePayment";
 import { useQuickAmounts } from "@/composables/useQuickAmounts";
+import { isInteractiveTarget, isMultilineTarget, focusElement } from "@/utils/keyboardNavigation";
 
 const log = logger.create("PaymentDialog");
 const settingsStore = usePOSSettingsStore();
@@ -2122,6 +2134,8 @@ const receivableAccounts = ref([]);
 const selectedReceivableAccount = ref("");
 const customAmount = ref("");
 const paymentEntries = ref([]);
+const paymentDialogContentRef = ref(null);
+const paymentSubmitLocked = ref(false);
 const customerCredit = ref([]);
 const customerBalance = ref({
 	total_outstanding: 0,
@@ -2949,6 +2963,7 @@ watch(
 
 watch(show, (newVal) => {
 	if (newVal) {
+		paymentSubmitLocked.value = false;
 		// Reset state when dialog opens (but NOT customerBalance - it's pre-fetched)
 		paymentEntries.value = [];
 		customAmount.value = "";
@@ -2990,6 +3005,17 @@ watch(show, (newVal) => {
 			const defaultMethod = paymentMethods.value.find((m) => m.default);
 			lastSelectedMethod.value = defaultMethod || paymentMethods.value[0];
 		}
+
+		nextTick(() => {
+			const primaryControls = [
+				...(paymentDialogContentRef.value?.querySelectorAll?.("[data-payment-primary]") || []),
+			];
+			const visibleControl = primaryControls.find(
+				(element) => element.getClientRects().length > 0 && !element.disabled
+			);
+			const firstMethod = paymentDialogContentRef.value?.querySelector("button:not(:disabled)");
+			focusElement(visibleControl || firstMethod || paymentDialogContentRef.value);
+		});
 
 		if (creditEnabled) {
 			log.debug(
@@ -3188,6 +3214,26 @@ function onPaymentMethodCancel() {
 	handlePointerCancel();
 }
 
+function handlePaymentDialogKeydown(event) {
+	if (event.defaultPrevented || isMultilineTarget(event.target)) return;
+
+	if (event.key === "Escape") {
+		event.preventDefault();
+		event.stopPropagation();
+		if (overpayConfirmVisible.value) {
+			resolveOverpayConfirm(false);
+		} else if (!props.isSubmitting) {
+			show.value = false;
+		}
+		return;
+	}
+
+	if (event.key !== "Enter" || isInteractiveTarget(event.target)) return;
+	event.preventDefault();
+	event.stopPropagation();
+	handleNumpadEnter(numpadValue.value);
+}
+
 // Overpayment confirmation via nested Radix Dialog (no Teleport / pointer-events hacks)
 const overpayConfirmVisible = ref(false);
 const overpayConfirmTitle = ref("");
@@ -3368,6 +3414,52 @@ function clearAll() {
 	customAmount.value = "";
 }
 
+function getAccountingPaymentData() {
+	let remainingDue = roundCurrency(props.grandTotal);
+	let changeReturned = 0;
+
+	const accountingPayments = paymentEntries.value
+		.map((entry) => {
+			const tendered = roundCurrency(entry.amount || 0);
+			const accountingAmount = Math.min(tendered, Math.max(remainingDue, 0));
+			remainingDue = roundCurrency(remainingDue - accountingAmount);
+			changeReturned = roundCurrency(changeReturned + Math.max(tendered - accountingAmount, 0));
+
+			return {
+				...entry,
+				amount: roundCurrency(accountingAmount),
+			};
+		})
+		.filter((entry) => entry.amount > 0);
+
+	return {
+		accountingPayments,
+		accountingPaidAmount: roundCurrency(
+			accountingPayments.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+		),
+		changeReturned,
+		outstandingAmount: Math.max(roundCurrency(remainingDue), 0),
+	};
+}
+
+function getHistoricalTenderedAmount() {
+	const totalTendered = roundCurrency(
+		paymentEntries.value.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+	);
+	const cashTendered = roundCurrency(
+		paymentEntries.value
+			.filter((entry) => {
+				const method = paymentMethods.value.find(
+					(pm) => pm.mode_of_payment === entry.mode_of_payment
+				);
+				return isCashPaymentMethod(method);
+			})
+			.reduce((sum, entry) => sum + (entry.amount || 0), 0)
+	);
+
+	return cashTendered > 0 ? cashTendered : totalTendered;
+}
+
 function completePayment() {
 	log.debug("[PaymentDialog] Complete payment called:", {
 		canComplete: canComplete.value,
@@ -3383,26 +3475,33 @@ function completePayment() {
 		},
 	});
 
-	if (!canComplete.value) {
+	if (!canComplete.value || props.isSubmitting || paymentSubmitLocked.value) {
 		log.warn("[PaymentDialog] Cannot complete - validation failed");
 		return;
 	}
+	paymentSubmitLocked.value = true;
 
 	// "Pay on Receivable Account": the chosen account holds the unpaid balance (the invoice's
 	// debit_to). Tendered payments are real money; whatever is left (grand_total − tendered)
 	// stays outstanding on that account — it is NOT a payment row.
 	const receivableAccount = selectedReceivableAccount.value || null;
+	const { accountingPayments, accountingPaidAmount, changeReturned, outstandingAmount } =
+		getAccountingPaymentData();
 
 	// Partial when the tendered amount (plus write-off) doesn't cover the total.
-	const effectivePaid = totalPaid.value + writeOffAmount.value;
+	const effectivePaid = accountingPaidAmount + writeOffAmount.value;
 	const isPartial = effectivePaid < props.grandTotal;
-	const outstanding = isPartial ? roundCurrency(props.grandTotal - effectivePaid) : 0;
+	const outstanding = isPartial
+		? roundCurrency(Math.max(outstandingAmount - writeOffAmount.value, 0))
+		: 0;
 
 	const paymentData = {
-		payments: paymentEntries.value,
-		change_amount: changeAmount.value,
+		payments: accountingPayments,
+		change_amount: changeReturned,
+		custom_tendered_amount: getHistoricalTenderedAmount(),
+		custom_change_returned: changeReturned,
 		is_partial_payment: isPartial,
-		paid_amount: totalPaid.value,
+		paid_amount: accountingPaidAmount,
 		outstanding_amount: outstanding,
 		sales_team: selectedSalesPersons.value.length > 0 ? selectedSalesPersons.value : null,
 		delivery_date: isSalesOrder.value ? deliveryDate.value : null,

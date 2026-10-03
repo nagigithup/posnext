@@ -12,6 +12,18 @@ export const shiftState = ref({
 	_receivedAt: 0,
 });
 
+function clearShiftState() {
+	shiftState.value = {
+		pos_opening_shift: null,
+		pos_profile: null,
+		company: null,
+		isOpen: false,
+		_initialElapsedMs: 0,
+		_receivedAt: 0,
+	};
+	localStorage.removeItem("pos_shift_data");
+}
+
 export function useShift() {
 	// Check for existing open shift
 	const checkOpeningShift = createResource({
@@ -47,15 +59,7 @@ export function useShift() {
 					})
 				);
 			} else {
-				shiftState.value = {
-					pos_opening_shift: null,
-					pos_profile: null,
-					company: null,
-					isOpen: false,
-					_initialElapsedMs: 0,
-					_receivedAt: 0,
-				};
-				localStorage.removeItem("pos_shift_data");
+				clearShiftState();
 			}
 		},
 		onError(error) {
@@ -136,15 +140,7 @@ export function useShift() {
 			return { closing_shift: JSON.stringify(closing_shift) };
 		},
 		onSuccess() {
-			shiftState.value = {
-				pos_opening_shift: null,
-				pos_profile: null,
-				company: null,
-				isOpen: false,
-				_initialElapsedMs: 0,
-				_receivedAt: 0,
-			};
-			localStorage.removeItem("pos_shift_data");
+			clearShiftState();
 		},
 		onError(error) {
 			console.error("Error submitting closing shift:", error);
@@ -171,5 +167,6 @@ export function useShift() {
 		createOpeningShift,
 		getClosingShiftData,
 		submitClosingShift,
+		clearShiftState,
 	};
 }

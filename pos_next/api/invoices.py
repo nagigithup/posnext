@@ -417,6 +417,78 @@ def _set_payment_accounts(payments, company):
 			)
 
 
+def _set_payment_amount(payment, amount):
+	if hasattr(payment, "set") and callable(payment.set):
+		payment.set("amount", amount)
+	else:
+		payment["amount"] = amount
+
+
+def _set_payment_base_amount(payment, amount):
+	if hasattr(payment, "set") and callable(payment.set):
+		payment.set("base_amount", amount)
+	else:
+		payment["base_amount"] = amount
+
+
+def _get_payment_amount(payment):
+	return flt(payment.get("amount") or 0)
+
+
+def _get_row_precision(row, fieldname, default=2):
+	if hasattr(row, "precision") and callable(row.precision):
+		return row.precision(fieldname)
+	return default
+
+
+def _cap_pos_payment_amounts_to_invoice_due(invoice_doc):
+	"""Keep POS payment rows to accounting-paid amounts, not cash tendered.
+
+	For POS over-tender, the excess is immediate change returned to the customer.
+	It must not become paid_amount, customer credit, advance, rounding, or GL.
+	"""
+	if not cint(invoice_doc.get("is_pos")) or invoice_doc.get("is_return") or not invoice_doc.get("payments"):
+		return
+
+	remaining_due = flt(invoice_doc.get("grand_total") or 0, invoice_doc.precision("grand_total"))
+	if remaining_due <= 0:
+		return
+
+	conversion_rate = flt(invoice_doc.get("conversion_rate") or 1)
+	change_returned = 0
+	for payment in invoice_doc.payments:
+		tendered = _get_payment_amount(payment)
+		accounting_paid = min(tendered, max(remaining_due, 0))
+		change_returned += max(tendered - accounting_paid, 0)
+		remaining_due -= accounting_paid
+		_set_payment_amount(payment, flt(accounting_paid, _get_row_precision(payment, "amount")))
+		_set_payment_base_amount(
+			payment,
+			flt(accounting_paid * conversion_rate, _get_row_precision(payment, "base_amount")),
+		)
+
+	existing_change = flt(invoice_doc.get("change_amount") or 0)
+	invoice_doc.change_amount = flt(max(existing_change, change_returned))
+	if invoice_doc.meta.has_field("base_change_amount"):
+		invoice_doc.base_change_amount = flt(invoice_doc.change_amount * conversion_rate)
+
+
+def _set_pos_tendered_display_fields(invoice_doc, invoice=None, data=None):
+	"""Persist POS display-only tendered/change values when the custom fields exist."""
+	invoice = invoice or {}
+	data = data or {}
+	if invoice_doc.doctype != DOCTYPE_SALES_INVOICE:
+		return
+
+	tendered_amount = data.get("custom_tendered_amount", invoice.get("custom_tendered_amount"))
+	change_returned = data.get("custom_change_returned", invoice.get("custom_change_returned"))
+
+	if tendered_amount is not None and invoice_doc.meta.has_field("custom_tendered_amount"):
+		invoice_doc.custom_tendered_amount = flt(tendered_amount)
+	if change_returned is not None and invoice_doc.meta.has_field("custom_change_returned"):
+		invoice_doc.custom_change_returned = flt(change_returned)
+
+
 # ==========================================
 # Stock Validation Functions
 # ==========================================
@@ -956,6 +1028,8 @@ def update_invoice(data):
 		if invoice_doc.base_grand_total is None:
 			invoice_doc.base_grand_total = 0.0
 
+		_cap_pos_payment_amounts_to_invoice_due(invoice_doc)
+
 		# Set accounts for payment methods before saving
 		_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
@@ -1361,6 +1435,12 @@ def submit_invoice(invoice=None, data=None):
 
 		# Set accounts for all payment methods before saving
 		if doctype == "Sales Invoice" and hasattr(invoice_doc, "payments"):
+			if flt(data.get("change_amount") or invoice.get("change_amount") or 0):
+				invoice_doc.change_amount = flt(
+					data.get("change_amount") or invoice.get("change_amount") or 0
+				)
+			_set_pos_tendered_display_fields(invoice_doc, invoice=invoice, data=data)
+			_cap_pos_payment_amounts_to_invoice_due(invoice_doc)
 			_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
 		# Handle sales team (multiple sales persons)
@@ -1573,6 +1653,8 @@ def submit_invoice(invoice=None, data=None):
 			"outstanding_amount": getattr(invoice_doc, "outstanding_amount", 0),
 			"paid_amount": getattr(invoice_doc, "paid_amount", 0),
 			"change_amount": getattr(invoice_doc, "change_amount", 0),
+			"custom_tendered_amount": getattr(invoice_doc, "custom_tendered_amount", 0),
+			"custom_change_returned": getattr(invoice_doc, "custom_change_returned", 0),
 		}
 
 		# Include offline_id in response for client-side tracking
@@ -1787,47 +1869,91 @@ def delete_invoice(invoice):
 
 @frappe.whitelist()
 def cleanup_old_drafts(pos_profile=None, max_age_hours=48):
-	"""
-	Clean up old draft invoices to prevent stock reservation issues.
-	Deletes drafts older than max_age_hours (default 24 hours).
-	"""
-	from datetime import datetime, timedelta
+	"""Deprecated age-based cleanup endpoint retained as a safe no-op.
 
-	doctype = "Sales Invoice"
-	cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
-
-	filters = {
-		"docstatus": 0,  # Draft only
-		"is_pos": 1,  # Only POS Sales Invoices
-		"modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
+	Draft lifetime is owned by its POS Opening Shift. Cleanup now runs only
+	after that exact shift closes via ``cleanup_session_drafts``.
+	"""
+	return {
+		"deleted": 0,
+		"message": "Age-based draft cleanup is disabled; drafts are cleaned when their POS session closes",
 	}
 
-	# Optionally filter by POS profile
-	if pos_profile:
-		filters["pos_profile"] = pos_profile
 
-	# Get old drafts
-	old_drafts = frappe.get_all(
-		doctype,
-		filters=filters,
-		fields=["name", "modified"],
-		limit_page_length=100,  # Safety limit
+def _is_pos_opening_shift_closed(pos_opening_shift):
+	if not pos_opening_shift:
+		return False
+
+	opening = frappe.db.get_value(
+		"POS Opening Shift",
+		pos_opening_shift,
+		["docstatus", "status", "pos_closing_shift"],
+		as_dict=True,
+	)
+	return bool(
+		opening
+		and opening.docstatus == 1
+		and opening.status == "Closed"
+		and opening.pos_closing_shift
 	)
 
+
+def _is_abandoned_session_draft(invoice, pos_opening_shift):
+	"""Return whether a locked Sales Invoice is safe for automatic cleanup."""
+	return bool(
+		invoice
+		and cint(invoice.docstatus) == 0
+		and cint(invoice.is_pos) == 1
+		and not cint(invoice.custom_is_booking)
+		and invoice.posa_pos_opening_shift == pos_opening_shift
+		and not cint(invoice.posa_is_printed)
+	)
+
+
+def cleanup_session_drafts(pos_opening_shift):
+	"""Delete abandoned temporary drafts belonging to one closed POS session.
+
+	Booking drafts are checked again under a row lock immediately before normal
+	Frappe deletion, so every caller receives the same server-side protection.
+	"""
+	if not _is_pos_opening_shift_closed(pos_opening_shift):
+		return {"deleted": 0, "message": "POS Opening Shift is still active"}
+
+	candidates = frappe.get_all(
+		"Sales Invoice",
+		filters={
+			"docstatus": 0,
+			"is_pos": 1,
+			"posa_pos_opening_shift": pos_opening_shift,
+			"posa_is_printed": 0,
+		},
+		pluck="name",
+	)
+	booking_field_exists = frappe.db.has_column("Sales Invoice", "custom_is_booking")
 	deleted_count = 0
-	for draft in old_drafts:
-		try:
-			frappe.delete_doc(doctype, draft["name"], force=True, ignore_permissions=True)
-			deleted_count += 1
-		except Exception as e:
-			frappe.log_error(
-				f"Failed to delete draft {draft['name']}: {e!s}",
-				"Draft Cleanup Error",
-			)
+
+	for invoice_name in candidates:
+		fields = ["docstatus", "is_pos", "posa_pos_opening_shift", "posa_is_printed"]
+		if booking_field_exists:
+			fields.append("custom_is_booking")
+		invoice = frappe.db.get_value(
+			"Sales Invoice",
+			invoice_name,
+			fields,
+			as_dict=True,
+			for_update=True,
+		)
+		if invoice and not booking_field_exists:
+			invoice.custom_is_booking = 0
+		if not _is_abandoned_session_draft(invoice, pos_opening_shift):
+			continue
+
+		frappe.delete_doc("Sales Invoice", invoice_name, ignore_permissions=True)
+		deleted_count += 1
 
 	return {
 		"deleted": deleted_count,
-		"message": f"Cleaned up {deleted_count} old draft invoices",
+		"message": f"Cleaned up {deleted_count} abandoned drafts for {pos_opening_shift}",
 	}
 
 

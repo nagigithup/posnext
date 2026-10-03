@@ -150,6 +150,8 @@
 							:key="customer.name"
 							v-memo="[customer.name, index === selectedIndex]"
 							@click="selectCustomer(customer)"
+							:ref="(element) => setCustomerResultRef(element, index)"
+							@focus="customerStore.setSelectedIndex(index)"
 							:class="[
 								'w-full text-start p-3 rounded-lg border transition-all duration-75',
 								index === selectedIndex
@@ -241,6 +243,11 @@ const { filteredCustomers, loading, selectedIndex, searchTerm, allCustomers, rec
 
 // Local state
 const showCreateDialog = ref(false);
+const customerResultRefs = ref([]);
+
+function setCustomerResultRef(element, index) {
+	if (element) customerResultRefs.value[index] = element;
+}
 
 const show = computed({
 	get: () => props.modelValue,
@@ -270,27 +277,39 @@ function handleSearchInput(event) {
 
 // Keyboard navigation
 function handleKeydown(event) {
+	if (event.key === "Escape") {
+		event.preventDefault();
+		event.stopPropagation();
+		show.value = false;
+		return;
+	}
 	if (customers.value.length === 0) return;
 
 	if (event.key === "ArrowDown") {
 		event.preventDefault();
+		event.stopPropagation();
 		customerStore.setSelectedIndex(
 			Math.min(selectedIndex.value + 1, customers.value.length - 1)
 		);
 	} else if (event.key === "ArrowUp") {
 		event.preventDefault();
+		event.stopPropagation();
 		customerStore.setSelectedIndex(Math.max(selectedIndex.value - 1, -1));
 	} else if (event.key === "Enter") {
 		event.preventDefault();
+		event.stopPropagation();
 		if (selectedIndex.value >= 0 && selectedIndex.value < customers.value.length) {
 			selectCustomer(customers.value[selectedIndex.value]);
 		} else if (customers.value.length === 1) {
 			selectCustomer(customers.value[0]);
 		}
-	} else if (event.key === "Escape") {
-		show.value = false;
 	}
 }
+
+watch(selectedIndex, (index) => {
+	if (index < 0) return;
+	nextTick(() => customerResultRefs.value[index]?.scrollIntoView?.({ block: "nearest" }));
+});
 
 onMounted(() => {
 	if (props.posProfile) {

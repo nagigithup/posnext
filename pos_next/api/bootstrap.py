@@ -65,6 +65,15 @@ def get_initial_data():
 		"locale": _get_user_language(),
 		"precision": _get_precision_settings(),
 		"can_switch_to_desk": "Nexus POS Manager" in frappe.get_roles(),
+		"can_submit_official_closing": bool(
+			set(frappe.get_roles())
+			& {"Accounts User", "Accounts Manager", "System Manager", "Sales Manager", "Nexus POS Manager"}
+		),
+		"can_submit_preliminary_closing": bool(
+			set(frappe.get_roles()) & {"Cashier", "POSNext Cashier"}
+		),
+		"has_preliminary_closing": False,
+		"has_official_closing_draft": False,
 		"shift": None,
 		"pos_profile": None,
 		"pos_settings": None,
@@ -85,6 +94,18 @@ def get_initial_data():
 		"period_start_date": str(shift["period_start_date"]),
 		"status": shift["status"],
 	}
+	result["has_preliminary_closing"] = bool(
+		frappe.db.exists(
+			"Cashier Preliminary Closing",
+			{"pos_opening_shift": shift["name"], "docstatus": ["<", 2]},
+		)
+	)
+	result["has_official_closing_draft"] = bool(
+		frappe.db.exists(
+			"POS Closing Shift",
+			{"pos_opening_shift": shift["name"], "docstatus": 0},
+		)
+	)
 
 	result["pos_profile"] = {
 		"name": pos_profile.name,
@@ -171,21 +192,38 @@ def _get_open_shift():
 				pos_profile_doc: Document
 			}
 	"""
-	shift = frappe.db.get_value(
-		"POS Opening Shift",
-		{
-			"user": frappe.session.user,
-			"pos_closing_shift": ["is", "not set"],
-			"docstatus": 1,
-			"status": "Open",
-		},
-		["name", "pos_profile", "period_start_date", "status"],
+	preliminary_closed_condition = (
+		"AND IFNULL(opening.custom_preliminary_closed, 0) = 0"
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed")
+		else ""
+	)
+	shift = frappe.db.sql(
+		f"""
+		SELECT opening.name, opening.pos_profile, opening.period_start_date, opening.status
+		FROM `tabPOS Opening Shift` opening
+		LEFT JOIN `tabCashier Preliminary Closing` preliminary
+		       ON preliminary.pos_opening_shift = opening.name
+		      AND preliminary.docstatus < 2
+		LEFT JOIN `tabPOS Closing Shift` closing
+		       ON closing.pos_opening_shift = opening.name
+		      AND closing.docstatus < 2
+		WHERE opening.user = %s
+		  AND IFNULL(opening.pos_closing_shift, '') = ''
+		  AND opening.docstatus = 1
+		  AND opening.status = 'Open'
+		  {preliminary_closed_condition}
+		  AND preliminary.name IS NULL
+		  AND closing.name IS NULL
+		ORDER BY opening.period_start_date DESC
+		LIMIT 1
+		""",
+		(frappe.session.user,),
 		as_dict=True,
-		order_by="period_start_date desc",
 	)
 
 	if not shift:
 		return None
+	shift = shift[0]
 
 	# Fetch POS Profile once, reuse throughout bootstrap
 	shift["pos_profile_doc"] = frappe.get_doc("POS Profile", shift["pos_profile"])

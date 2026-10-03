@@ -5,8 +5,11 @@
 		<Transition name="dialog">
 			<div
 				v-if="show"
+				ref="dialogOverlayRef"
+				tabindex="-1"
 				class="fixed inset-0 bg-black/20 dark:bg-black/70 overflow-y-auto dialog-overlay outline-none z-dialog-overlay"
 				@click.self="cancel"
+				@keydown="handleDialogKeydown"
 			>
 				<div
 					class="flex min-h-screen flex-col items-center justify-center px-4 py-4 text-center"
@@ -485,6 +488,7 @@ import {
 import { Button, FeatherIcon, createResource } from "frappe-ui";
 import { computed, ref, watch } from "vue";
 import SelectInput from "@/components/common/SelectInput.vue";
+import { isInteractiveTarget, isMultilineTarget, focusElement } from "@/utils/keyboardNavigation";
 
 const { showSuccess, showError, showWarning } = useToast();
 const settingsStore = usePOSSettingsStore();
@@ -524,6 +528,7 @@ const localSerials = ref([]); // List of serial numbers for this item
 const removedSerials = ref([]); // Track serials removed during this edit session
 const originalSerials = ref([]); // Original serials when dialog opened
 const originalPriceListRate = ref(0); // Original price_list_rate when dialog opened (for rate edit validation)
+const dialogOverlayRef = ref(null);
 
 const getItemDetailsResource = createResource({
 	url: "pos_next.api.items.get_item_details",
@@ -534,6 +539,31 @@ const show = computed({
 	get: () => props.modelValue,
 	set: (val) => emit("update:modelValue", val),
 });
+
+watch(show, (isOpen) => {
+	if (!isOpen) return;
+	requestAnimationFrame(() => {
+		const firstInput =
+			dialogOverlayRef.value?.querySelector("input:not(:disabled), select:not(:disabled)") ||
+			dialogOverlayRef.value?.querySelector("button:not(:disabled)");
+		focusElement(firstInput || dialogOverlayRef.value);
+	});
+});
+
+function handleDialogKeydown(event) {
+	if (event.defaultPrevented || isMultilineTarget(event.target)) return;
+	if (event.key === "Escape") {
+		event.preventDefault();
+		event.stopPropagation();
+		cancel();
+		return;
+	}
+	if (event.key === "Enter" && !isInteractiveTarget(event.target)) {
+		event.preventDefault();
+		event.stopPropagation();
+		updateItem();
+	}
+}
 
 const availableUoms = computed(() => {
 	if (!localItem.value || !localItem.value.item_uoms) return [];

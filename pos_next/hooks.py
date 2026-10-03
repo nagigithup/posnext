@@ -87,9 +87,23 @@ jinja = {
 # Fixtures
 # --------
 fixtures = [
-	{"dt": "Role", "filters": [["role_name", "in", ["POSNext Cashier", "Nexus POS Manager"]]]},
+	{
+		"dt": "Role",
+		"filters": [["role_name", "in", ["Cashier", "POSNext Cashier", "Nexus POS Manager"]]],
+	},
 	{"dt": "Custom DocPerm", "filters": [["role", "in", ["POSNext Cashier"]]]},
+	{"dt": "Print Format", "filters": [["name", "=", "POS Next Receipt"]]},
 ]
+
+permission_query_conditions = {
+	"Cashier Preliminary Closing": "pos_next.permissions.get_preliminary_closing_query_conditions",
+	"POS Closing Shift": "pos_next.permissions.get_official_closing_query_conditions",
+}
+
+has_permission = {
+	"Cashier Preliminary Closing": "pos_next.permissions.has_preliminary_closing_permission",
+	"POS Closing Shift": "pos_next.permissions.has_official_closing_permission",
+}
 
 # Installation
 # ------------

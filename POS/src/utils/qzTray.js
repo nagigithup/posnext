@@ -127,6 +127,7 @@ let _connectPromise = null;
  * @returns {Promise<boolean>} true if connected successfully
  */
 export async function connect() {
+	setupSecurity();
 	if (qz.websocket.isActive()) {
 		qzConnected.value = true;
 		return true;
@@ -144,8 +145,6 @@ export async function connect() {
 }
 
 async function _doConnect() {
-	setupSecurity();
-
 	qz.websocket.setClosedCallbacks(() => {
 		log.info("QZ Tray connection closed");
 		qzConnected.value = false;
@@ -220,6 +219,132 @@ export async function findPrinters() {
 // ============================================================================
 // Print Dispatch
 // ============================================================================
+
+const SILENT_TRUST_MESSAGE =
+	"QZ Tray is connected, but trusted silent printing is not configured. Configure the POS Next QZ certificate and signing key, then approve the certificate in QZ Tray.";
+
+export class QZPrintError extends Error {
+	constructor(message, code, { dispatchAttempted = false } = {}) {
+		super(message);
+		this.name = "QZPrintError";
+		this.code = code;
+		this.dispatchAttempted = dispatchAttempted;
+	}
+}
+
+async function requireConnection() {
+	if (qz.websocket.isActive()) return;
+	const connected = await connect();
+	if (!connected) {
+		throw new QZPrintError(
+			"QZ Tray is unavailable. Start QZ Tray and verify its WebSocket connection.",
+			"QZ_UNAVAILABLE",
+		);
+	}
+}
+
+async function getTrustedPrinters() {
+	await requireConnection();
+	let printers;
+	try {
+		// This signed request also confirms that certificate/signing setup is usable.
+		printers = await qz.printers.find();
+	} catch (error) {
+		if (!_certProvided || qzCertStatus.value === "untrusted") {
+			throw new QZPrintError(SILENT_TRUST_MESSAGE, "QZ_TRUST_NOT_CONFIGURED");
+		}
+		throw new QZPrintError(`QZ Tray could not list printers: ${error?.message || error}`, "QZ_PRINTER_LOOKUP_FAILED");
+	}
+
+	if (!_certProvided || qzCertStatus.value !== "trusted") {
+		throw new QZPrintError(SILENT_TRUST_MESSAGE, "QZ_TRUST_NOT_CONFIGURED");
+	}
+	return Array.isArray(printers) ? printers : [];
+}
+
+export function selectSavedPrinter(preferred, availablePrinters) {
+	return preferred && availablePrinters.includes(preferred) ? preferred : "";
+}
+
+async function resolvePrinterName(printerName) {
+	const printers = await getTrustedPrinters();
+	const preferred = printerName || getSavedPrinterName();
+	const selected = selectSavedPrinter(preferred, printers);
+	if (selected) return selected;
+	if (preferred) log.warn(`Saved printer "${preferred}" is unavailable; using system default`);
+
+	let defaultPrinter = "";
+	try {
+		defaultPrinter = await qz.printers.getDefault();
+	} catch (error) {
+		log.warn("Could not resolve the system default printer:", error?.message || error);
+	}
+	if (!defaultPrinter) {
+		throw new QZPrintError(
+			"No POS printer is selected and QZ Tray has no system default printer.",
+			"QZ_PRINTER_NOT_CONFIGURED",
+		);
+	}
+	return defaultPrinter;
+}
+
+export function buildBase64PixelPayload(format, base64Data) {
+	return [{ type: "pixel", format, flavor: "base64", data: base64Data }];
+}
+
+export function buildThermalPrintOptions(format, options = {}) {
+	return {
+		size: {
+			width: Number(options.width) || 80,
+			height: Number(options.height),
+			custom: true,
+		},
+		units: "mm",
+		orientation: "portrait",
+		margins: { top: 0, right: 0, bottom: 0, left: 0 },
+		colorType: "grayscale",
+		interpolation: "bicubic",
+		rasterize: format === "pdf",
+		scaleContent: format === "image",
+		jobName: options.jobName || "POS Next Receipt",
+	};
+}
+
+async function printBase64Pixel(format, base64Data, printerName, options = {}) {
+	if (!base64Data || !["pdf", "image"].includes(format)) {
+		throw new QZPrintError("Invalid rendered receipt payload.", "QZ_INVALID_PAYLOAD");
+	}
+
+	const printer = await resolvePrinterName(printerName);
+	const width = Number(options.width) || 80;
+	const height = Number(options.height);
+	if (!Number.isFinite(height) || height <= 0) {
+		throw new QZPrintError("Invalid receipt height.", "QZ_INVALID_DIMENSIONS");
+	}
+
+	const config = qz.configs.create(printer, buildThermalPrintOptions(format, { ...options, width, height }));
+	const data = buildBase64PixelPayload(format, base64Data);
+
+	try {
+		await qz.print(config, data);
+		log.info(`Rendered ${format.toUpperCase()} receipt sent to "${printer}" (${width}×${height} mm)`);
+		return { printer, width, height, format };
+	} catch (error) {
+		throw new QZPrintError(
+			`QZ Tray failed while dispatching to "${printer}": ${error?.message || error}`,
+			"QZ_PRINT_FAILED",
+			{ dispatchAttempted: true },
+		);
+	}
+}
+
+export function printPDFBase64(base64Data, printerName, options = {}) {
+	return printBase64Pixel("pdf", base64Data, printerName, options);
+}
+
+export function printImageBase64(base64Data, printerName, options = {}) {
+	return printBase64Pixel("image", base64Data, printerName, options);
+}
 
 /**
  * Send rendered HTML to a printer via QZ Tray pixel printing.

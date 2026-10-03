@@ -73,16 +73,32 @@ def check_opening_shift(user=None):
 	if not user:
 		user = frappe.session.user
 
-	open_shifts = frappe.db.get_all(
-		"POS Opening Shift",
-		filters={
-			"user": user,
-			"pos_closing_shift": ["is", "not set"],
-			"docstatus": 1,
-			"status": "Open",
-		},
-		fields=["name", "pos_profile", "period_start_date"],
-		order_by="period_start_date desc",
+	preliminary_closed_condition = (
+		"AND IFNULL(opening.custom_preliminary_closed, 0) = 0"
+		if frappe.db.has_column("POS Opening Shift", "custom_preliminary_closed")
+		else ""
+	)
+	open_shifts = frappe.db.sql(
+		f"""
+		SELECT opening.name, opening.pos_profile, opening.period_start_date
+		FROM `tabPOS Opening Shift` opening
+		LEFT JOIN `tabCashier Preliminary Closing` preliminary
+		       ON preliminary.pos_opening_shift = opening.name
+		      AND preliminary.docstatus < 2
+		LEFT JOIN `tabPOS Closing Shift` closing
+		       ON closing.pos_opening_shift = opening.name
+		      AND closing.docstatus < 2
+		WHERE opening.user = %s
+		  AND IFNULL(opening.pos_closing_shift, '') = ''
+		  AND opening.docstatus = 1
+		  AND opening.status = 'Open'
+		  {preliminary_closed_condition}
+		  AND preliminary.name IS NULL
+		  AND closing.name IS NULL
+		ORDER BY opening.period_start_date DESC
+		""",
+		(user,),
+		as_dict=True,
 	)
 
 	if not open_shifts:
@@ -148,9 +164,13 @@ def create_opening_shift(pos_profile, company, balance_details):
 @frappe.whitelist()
 def get_closing_shift_data(opening_shift):
 	"""Get data for closing shift"""
-	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import make_closing_shift_from_opening
+	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import (
+		make_closing_shift_from_opening,
+		validate_official_closing_access,
+	)
 
 	try:
+		validate_official_closing_access()
 		# Get the opening shift document
 		opening_shift_doc = frappe.get_doc("POS Opening Shift", opening_shift)
 
@@ -173,9 +193,11 @@ def submit_closing_shift(closing_shift):
 	"""Submit closing shift"""
 	from pos_next.pos_next.doctype.pos_closing_shift.pos_closing_shift import (
 		submit_closing_shift as submit_shift,
+		validate_official_closing_access,
 	)
 
 	try:
+		validate_official_closing_access()
 		# closing_shift is already a JSON string from frontend
 		# If it's a dict, convert to JSON string
 		if isinstance(closing_shift, dict):

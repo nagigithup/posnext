@@ -31,6 +31,46 @@ ITEM_RESULT_FIELDS = [
 ITEM_RESULT_COLUMNS = ",\n\t".join(ITEM_RESULT_FIELDS)
 
 
+def _lookup_item_by_barcode_or_code(barcode):
+	barcode_data = frappe.db.get_value(
+		"Item Barcode", {"barcode": barcode}, ["parent", "uom"], as_dict=True
+	)
+	if barcode_data:
+		return barcode_data.parent, barcode_data.uom
+
+	item_code = frappe.db.get_value("Item", {"name": barcode})
+	return item_code, None
+
+
+def _resolve_item_lookup_from_barcode(barcode, pos_profile):
+	resolved_barcode_data = None
+	effective_barcode = barcode
+	is_scale_barcode = False
+
+	item_code, barcode_uom = _lookup_item_by_barcode_or_code(effective_barcode)
+	if item_code:
+		return item_code, barcode_uom, resolved_barcode_data, effective_barcode, is_scale_barcode
+
+	from pos_next.services.barcode import resolve_barcode, resolve_scale_barcode
+
+	resolved_barcode_data = resolve_scale_barcode(barcode, pos_profile)
+	if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
+		is_scale_barcode = True
+		effective_barcode = resolved_barcode_data["item_barcode"]
+		item_code, barcode_uom = _lookup_item_by_barcode_or_code(effective_barcode)
+
+		if not item_code:
+			frappe.throw(_("Scale item barcode {0} not found").format(effective_barcode))
+
+	if not item_code:
+		resolved_barcode_data = resolve_barcode(barcode, pos_profile)
+		if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
+			effective_barcode = resolved_barcode_data["item_barcode"]
+			item_code, barcode_uom = _lookup_item_by_barcode_or_code(effective_barcode)
+
+	return item_code, barcode_uom, resolved_barcode_data, effective_barcode, is_scale_barcode
+
+
 def get_stock_availability(item_code, warehouse):
 	"""Return total available quantity for an item in the given warehouse."""
 	if not warehouse:
@@ -264,6 +304,11 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 			"doctype": "Sales Invoice",
 			"item_code": item.get("item_code"),
 			"company": item.get("company"),
+			"customer": item.get("customer") or (doc.get("customer") if doc else None),
+			"is_pos": item.get("is_pos") or (doc.get("is_pos") if doc else 0),
+			"pos_profile": item.get("pos_profile") or (doc.get("pos_profile") if doc else None),
+			"transaction_date": item.get("transaction_date")
+			or (doc.get("transaction_date") if doc else None),
 			"qty": item.get("qty", 1),
 			"uom": item.get("uom"),  # Include UOM to fetch correct price list rate
 			"selling_price_list": item.get("selling_price_list"),
@@ -319,27 +364,9 @@ def search_by_barcode(barcode, pos_profile):
 		if not pos_profile:
 			frappe.throw(_("POS Profile is required"))
 
-		# Try to resolve weighted/priced barcodes if barcode_resolver is available
-		resolved_barcode_data = None
-		effective_barcode = barcode
-		from pos_next.services.barcode import resolve_barcode
-
-		resolved_barcode_data = resolve_barcode(barcode, pos_profile)
-		if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
-			effective_barcode = resolved_barcode_data["item_barcode"]
-
-		# Search for item by barcode - also get UOM if barcode has specific UOM
-		barcode_data = frappe.db.get_value(
-			"Item Barcode", {"barcode": effective_barcode}, ["parent", "uom"], as_dict=True
+		item_code, barcode_uom, resolved_barcode_data, _effective_barcode, is_scale_barcode = (
+			_resolve_item_lookup_from_barcode(barcode, pos_profile)
 		)
-
-		if barcode_data:
-			item_code = barcode_data.parent
-			barcode_uom = barcode_data.uom
-		else:
-			# Try searching in item code field directly
-			item_code = frappe.db.get_value("Item", {"name": effective_barcode})
-			barcode_uom = None
 
 		if not item_code:
 			frappe.throw(_("Item with barcode {0} not found").format(barcode))
@@ -413,8 +440,12 @@ def search_by_barcode(barcode, pos_profile):
 			)
 			if resolved_item_data:
 				item_details.update(resolved_item_data)
+				if is_scale_barcode:
+					item_details["resolved_barcode_type"] = "Scale"
 
 		return item_details
+	except frappe.ValidationError:
+		raise
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Search by Barcode Error")
 		frappe.throw(_("Error searching by barcode: {0}").format(str(e)))
@@ -1164,16 +1195,21 @@ def get_items(
 	try:
 		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
 
-		# Try to resolve weighted/priced barcodes if barcode_resolver is available
 		resolved_barcode_data = None
 		effective_search_term = search_term
 		if search_term and len(search_term.strip().split()) == 1:
-			from pos_next.services.barcode import resolve_barcode
+			barcode_term = search_term.strip()
+			item_code, _barcode_uom = _lookup_item_by_barcode_or_code(barcode_term)
+			if not item_code:
+				from pos_next.services.barcode import resolve_barcode, resolve_scale_barcode
 
-			resolved_barcode_data = resolve_barcode(search_term.strip(), pos_profile)
-			if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
-				# Use the extracted item barcode for searching
-				effective_search_term = resolved_barcode_data["item_barcode"]
+				resolved_barcode_data = resolve_scale_barcode(barcode_term, pos_profile)
+				if not resolved_barcode_data:
+					resolved_barcode_data = resolve_barcode(barcode_term, pos_profile)
+
+				if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
+					# Use the extracted item barcode for searching
+					effective_search_term = resolved_barcode_data["item_barcode"]
 
 		# FILTERING LOGIC:
 		# When show_variants_as_items=1: Variants shown directly in grid, templates excluded
@@ -1787,6 +1823,8 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):
 			"has_serial_no": item_doc.has_serial_no,
 			"is_stock_item": item_doc.is_stock_item,
 			"pos_profile": pos_profile,
+			"customer": customer,
+			"is_pos": 1,
 			"qty": qty,
 		}
 

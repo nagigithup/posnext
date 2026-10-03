@@ -60,6 +60,44 @@
 			</div>
 		</button>
 
+		<!-- Booking Invoice -->
+		<button
+			@click="handleMenuClick('booking')"
+			:class="[
+				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
+				activeMenu === 'booking'
+					? 'bg-indigo-100 text-indigo-600'
+					: 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+			]"
+			:title="__('Booking Invoice')"
+		>
+			<FeatherIcon name="calendar" class="w-5 h-5" />
+			<div
+				class="absolute start-full ms-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50"
+			>
+				{{ __("Booking Invoice") }}
+			</div>
+		</button>
+
+		<!-- Receive Deposit -->
+		<button
+			@click="handleMenuClick('deposit')"
+			:class="[
+				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
+				activeMenu === 'deposit'
+					? 'bg-indigo-100 text-indigo-600'
+					: 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+			]"
+			:title="__('Receive Deposit')"
+		>
+			<FeatherIcon name="archive" class="w-5 h-5" />
+			<div
+				class="absolute start-full ms-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50"
+			>
+				{{ __("Receive Deposit") }}
+			</div>
+		</button>
+
 		<!-- Spacer to push settings to bottom -->
 		<div class="flex-1"></div>
 

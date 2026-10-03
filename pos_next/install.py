@@ -14,6 +14,7 @@ This module handles post-fixture tasks like setting defaults and clearing cache.
 import logging
 
 import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ def after_install():
 
 		# Setup default print format for POS Profiles
 		setup_default_print_format()
+		setup_cashier_preliminary_closing()
 
 		# Clear cache to ensure changes take effect
 		frappe.clear_cache()
@@ -50,6 +52,7 @@ def after_migrate():
 
 		# Setup default print format
 		setup_default_print_format(quiet=True)
+		setup_cashier_preliminary_closing()
 
 		# Clear cache
 		frappe.clear_cache()
@@ -107,6 +110,77 @@ def setup_default_print_format(quiet=False):
 	except Exception as e:
 		log_message(f"Error setting up default print format: {str(e)}", level="error")
 		frappe.log_error(title="Default Print Format Setup Error", message=frappe.get_traceback())
+
+
+def setup_cashier_preliminary_closing():
+	"""Install the external links and payment mapping used by preliminary closing."""
+	create_custom_fields(
+		{
+			"POS Profile": [
+				{
+					"fieldname": "posa_network_mode_of_payment",
+					"label": "Network Mode of Payment",
+					"fieldtype": "Link",
+					"options": "Mode of Payment",
+					"insert_after": "posa_cash_mode_of_payment",
+				},
+			],
+			"POS Closing Shift": [
+				{
+					"fieldname": "custom_preliminary_closing",
+					"label": "Cashier Preliminary Closing",
+					"fieldtype": "Link",
+					"options": "Cashier Preliminary Closing",
+					"insert_after": "pos_opening_shift",
+					"read_only": 1,
+					"unique": 1,
+				},
+			],
+			"POS Opening Shift": [
+				{
+					"fieldname": "custom_preliminary_closed",
+					"label": "Preliminary Closed",
+					"fieldtype": "Check",
+					"insert_after": "pos_closing_shift",
+					"default": "0",
+					"allow_on_submit": 1,
+					"read_only": 1,
+					"no_copy": 1,
+				},
+				{
+					"fieldname": "custom_preliminary_closing",
+					"label": "Cashier Preliminary Closing",
+					"fieldtype": "Link",
+					"options": "Cashier Preliminary Closing",
+					"insert_after": "custom_preliminary_closed",
+					"allow_on_submit": 1,
+					"read_only": 1,
+					"no_copy": 1,
+				},
+			],
+			"POS Invoice": [
+				{
+					"fieldname": "posa_pos_opening_shift",
+					"label": "POS Opening Shift",
+					"fieldtype": "Link",
+					"options": "POS Opening Shift",
+					"insert_after": "pos_profile",
+					"read_only": 1,
+					"no_copy": 1,
+				},
+				{
+					"fieldname": "posa_is_printed",
+					"label": "POS Invoice Printed",
+					"fieldtype": "Check",
+					"insert_after": "posa_pos_opening_shift",
+					"default": "0",
+					"hidden": 1,
+				},
+			],
+		},
+		ignore_validate=True,
+		update=True,
+	)
 
 
 def log_message(message, level="info", indent=0):

@@ -6,6 +6,13 @@
  "field_order": [
   "pos_profile",
   "enabled",
+  "section_break_erpnext_compatibility",
+  "invoice_type",
+  "column_break_erpnext_compatibility",
+  "post_change_gl_entries",
+  "section_break_pos_fields",
+  "invoice_fields",
+  "pos_search_fields",
   "section_break_localization",
   "allowed_locales",
   "section_break_wallet",
@@ -73,6 +80,13 @@
   "enable_session_lock",
   "session_lock_timeout",
   "barcode_tab",
+  "enable_scale_barcode",
+  "scale_barcode_start_with",
+  "scale_barcode_total_length",
+  "scale_item_barcode_length",
+  "scale_weight_length",
+  "scale_weight_divisor",
+  "scale_check_digit_length",
   "barcode_rules"
  ],
  "fields": [
@@ -91,6 +105,47 @@
    "fieldname": "enabled",
    "fieldtype": "Check",
    "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_erpnext_compatibility",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Compatibility"
+  },
+  {
+   "default": "Sales Invoice",
+   "description": "The system will create a Sales Invoice or a POS Invoice from the POS interface based on this setting. For high-volume transactions, it is recommended to use POS Invoice.",
+   "fieldname": "invoice_type",
+   "fieldtype": "Select",
+   "label": "Invoice Type Created via POS Screen",
+   "options": "Sales Invoice\nPOS Invoice"
+  },
+  {
+   "fieldname": "column_break_erpnext_compatibility",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "If enabled, ledger entries will be posted for change amount in POS transactions",
+   "fieldname": "post_change_gl_entries",
+   "fieldtype": "Check",
+   "label": "Create Ledger Entries for Change Amount",
+   "options": "1"
+  },
+  {
+   "fieldname": "section_break_pos_fields",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "invoice_fields",
+   "fieldtype": "Table",
+   "label": "POS Additional Fields",
+   "options": "POS Field"
+  },
+  {
+   "fieldname": "pos_search_fields",
+   "fieldtype": "Table",
+   "label": "POS Search Fields",
+   "options": "POS Search Fields"
   },
   {
    "fieldname": "section_break_localization",
@@ -542,6 +597,55 @@
    "label": "Barcode"
   },
   {
+   "default": "1",
+   "description": "Enable parsing of weighted scale barcodes after normal barcode lookup fails",
+   "fieldname": "enable_scale_barcode",
+   "fieldtype": "Check",
+   "label": "Enable Scale Barcode"
+  },
+  {
+   "default": "221",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_barcode_start_with",
+   "fieldtype": "Data",
+   "label": "Scale Barcode Start With"
+  },
+  {
+   "default": "13",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_barcode_total_length",
+   "fieldtype": "Int",
+   "label": "Scale Barcode Total Length"
+  },
+  {
+   "default": "7",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_item_barcode_length",
+   "fieldtype": "Int",
+   "label": "Scale Item Barcode Length"
+  },
+  {
+   "default": "5",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_weight_length",
+   "fieldtype": "Int",
+   "label": "Scale Weight Length"
+  },
+  {
+   "default": "1000",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_weight_divisor",
+   "fieldtype": "Float",
+   "label": "Scale Weight Divisor"
+  },
+  {
+   "default": "1",
+   "depends_on": "enable_scale_barcode",
+   "fieldname": "scale_check_digit_length",
+   "fieldtype": "Int",
+   "label": "Scale Check Digit Length"
+  },
+  {
    "fieldname": "barcode_rules",
    "fieldtype": "Table",
    "label": "Barcode Rules",
@@ -550,7 +654,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-03 15:54:09.903964",
+ "modified": "2026-08-23 14:20:00.000000",
  "modified_by": "Administrator",
  "module": "POS Next",
  "name": "POS Settings",
